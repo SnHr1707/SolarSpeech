@@ -12,8 +12,9 @@ class SingleMfmScreen extends ConsumerStatefulWidget {
   final String mfmId;
   final String plantId;
   final String? initialDate;
+  final String? initialChart;
   const SingleMfmScreen(
-      {super.key, required this.mfmId, required this.plantId, this.initialDate});
+      {super.key, required this.mfmId, required this.plantId, this.initialDate, this.initialChart});
 
   @override
   ConsumerState<SingleMfmScreen> createState() => _SingleMfmScreenState();
@@ -37,6 +38,12 @@ class _SingleMfmScreenState extends ConsumerState<SingleMfmScreen> {
       _selectedDate = parsed ?? DateTime(2026, 3, 5);
     } else {
       _selectedDate = DateTime(2026, 3, 5);
+    }
+    if (widget.initialChart != null) {
+      final match = _chartOptions.where(
+        (o) => o.toLowerCase() == widget.initialChart!.toLowerCase(),
+      );
+      if (match.isNotEmpty) _selectedChart = match.first;
     }
   }
 
