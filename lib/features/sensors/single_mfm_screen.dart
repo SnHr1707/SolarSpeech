@@ -48,6 +48,29 @@ class _SingleMfmScreenState extends ConsumerState<SingleMfmScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant SingleMfmScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.mfmId != widget.mfmId ||
+        oldWidget.initialChart != widget.initialChart ||
+        oldWidget.initialDate != widget.initialDate) {
+      setState(() {
+        if (widget.initialDate != null) {
+          final parsed = DateTime.tryParse(widget.initialDate!);
+          _selectedDate = parsed ?? DateTime(2026, 3, 5);
+        } else {
+          _selectedDate = DateTime(2026, 3, 5);
+        }
+        if (widget.initialChart != null) {
+          final match = _chartOptions.where(
+            (o) => o.toLowerCase() == widget.initialChart!.toLowerCase(),
+          );
+          if (match.isNotEmpty) _selectedChart = match.first;
+        }
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final mfmAsync = ref.watch(mfmByIdProvider(widget.mfmId));
     final dataAsync = ref.watch(mfmDataByDateProvider(

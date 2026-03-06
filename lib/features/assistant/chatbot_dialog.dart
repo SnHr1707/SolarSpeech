@@ -21,6 +21,7 @@ class _ChatbotDialogState extends State<ChatbotDialog>
   late stt.SpeechToText _speech;
   bool _isListening = false;
   bool _speechAvailable = false;
+  int _listenSession = 0; // session counter to isolate voice sessions
   late AnimationController _pulseCtrl;
   late Animation<double> _pulseAnim;
 
@@ -48,11 +49,12 @@ class _ChatbotDialogState extends State<ChatbotDialog>
       onStatus: (status) {
         if (status == 'done' || status == 'notListening') {
           if (_isListening && mounted) {
+            final text = _textController.text;
             setState(() => _isListening = false);
             _pulseCtrl.stop();
             _pulseCtrl.reset();
-            if (_textController.text.isNotEmpty) {
-              _sendMessage(_textController.text);
+            if (text.isNotEmpty) {
+              _sendMessage(text);
             }
           }
         }
@@ -71,6 +73,10 @@ class _ChatbotDialogState extends State<ChatbotDialog>
     if (_isProcessing) return;
     if (!_isListening) {
       if (!_speechAvailable) return;
+      // Cancel any prior session to avoid stale callbacks
+      _speech.cancel();
+      _listenSession++;
+      final currentSession = _listenSession;
       setState(() {
         _isListening = true;
         _textController.clear();
@@ -78,9 +84,9 @@ class _ChatbotDialogState extends State<ChatbotDialog>
       _pulseCtrl.repeat(reverse: true);
       _speech.listen(
         onResult: (val) {
-          if (mounted) {
-            setState(() => _textController.text = val.recognizedWords);
-          }
+          // Ignore results from a stale/prior session
+          if (!mounted || currentSession != _listenSession) return;
+          setState(() => _textController.text = val.recognizedWords);
         },
         listenFor: const Duration(seconds: 10),
         pauseFor: const Duration(seconds: 3),
@@ -164,7 +170,16 @@ class _ChatbotDialogState extends State<ChatbotDialog>
         t.contains('top ') || t.contains('bottom ') ||
         t.contains('how is') || t.contains('count') ||
         t.contains('summary') || t.contains('status') ||
-        t.contains('help') || t.contains('contribution');
+        t.contains('help') || t.contains('contribution') ||
+        t.contains('trend') || t.contains('historical') ||
+        t.contains('last ') || t.contains('past ') ||
+        t.contains('yesterday') || t.contains('this week') ||
+        t.contains('this month') || t.contains('last week') ||
+        t.contains('last month') || t.contains('improving') ||
+        t.contains('declining') || t.contains('energy') ||
+        t.contains('power') || t.contains('generation') ||
+        t.contains('sensor') || t.contains('temperature') ||
+        t.contains('versus') || t.contains(' vs ');
   }
 
   bool _isNavigationCommand(String text) {
@@ -213,7 +228,7 @@ class _ChatbotDialogState extends State<ChatbotDialog>
 
   @override
   void dispose() {
-    _speech.stop();
+    _speech.cancel();
     _textController.dispose();
     _scrollController.dispose();
     _pulseCtrl.dispose();
@@ -228,7 +243,7 @@ class _ChatbotDialogState extends State<ChatbotDialog>
     final dialogHeight = isCompact ? screenSize.height * 0.75 : 600.0;
 
     return Dialog(
-      backgroundColor: const Color(0xFF1E293B),
+      backgroundColor: AppColors.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       child: SizedBox(
         width: dialogWidth,
@@ -236,10 +251,10 @@ class _ChatbotDialogState extends State<ChatbotDialog>
         child: Column(
           children: [
             _buildHeader(),
-            const Divider(height: 1, color: Colors.white12),
+            const Divider(height: 1, color: AppColors.border),
             Expanded(child: _buildMessagesList()),
             if (_isProcessing) _buildTypingIndicator(),
-            const Divider(height: 1, color: Colors.white12),
+            const Divider(height: 1, color: AppColors.border),
             _buildQuickActions(),
             _buildInputBar(),
           ],
@@ -270,16 +285,16 @@ class _ChatbotDialogState extends State<ChatbotDialog>
               children: [
                 Text('Solar Assistant',
                     style: TextStyle(
-                        color: Colors.white,
+                        color: AppColors.textPrimary,
                         fontSize: 16,
                         fontWeight: FontWeight.w600)),
                 Text('Ask anything about your solar data',
-                    style: TextStyle(color: Colors.white38, fontSize: 11)),
+                    style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
               ],
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.close, color: Colors.white38, size: 20),
+            icon: const Icon(Icons.close, color: AppColors.textSecondary, size: 20),
             onPressed: () => Navigator.of(context).pop(),
             splashRadius: 18,
           ),
@@ -308,7 +323,7 @@ class _ChatbotDialogState extends State<ChatbotDialog>
           Container(
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.08),
+              color: AppColors.primaryLight,
               borderRadius: BorderRadius.circular(12),
             ),
             child: const Icon(Icons.smart_toy_rounded, color: AppColors.primary, size: 14),
@@ -327,12 +342,14 @@ class _ChatbotDialogState extends State<ChatbotDialog>
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         children: [
-          _quickChip('Compare plants'),
+          _quickChip('Compare inverters'),
           _quickChip('Energy today'),
+          _quickChip('Last 5 days trend'),
           _quickChip('System status'),
+          _quickChip('Compare plants'),
           _quickChip('Top inverters'),
           _quickChip('Percentage breakdown'),
-          _quickChip('Average power'),
+          _quickChip('Historical data'),
           _quickChip('Sensor readings'),
           _quickChip('Help'),
         ],
@@ -345,9 +362,9 @@ class _ChatbotDialogState extends State<ChatbotDialog>
       padding: const EdgeInsets.only(right: 6),
       child: ActionChip(
         label: Text(label,
-            style: const TextStyle(color: Colors.white60, fontSize: 11)),
-        backgroundColor: Colors.white.withValues(alpha: 0.06),
-        side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+            style: const TextStyle(color: AppColors.primary, fontSize: 11)),
+        backgroundColor: AppColors.primaryLighter,
+        side: BorderSide(color: AppColors.primary.withValues(alpha: 0.2)),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         padding: const EdgeInsets.symmetric(horizontal: 4),
         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -374,11 +391,11 @@ class _ChatbotDialogState extends State<ChatbotDialog>
                   shape: BoxShape.circle,
                   color: _isListening
                       ? AppColors.alert
-                      : Colors.white.withValues(alpha: 0.08),
+                      : AppColors.primaryLighter,
                 ),
                 child: Icon(
                   _isListening ? Icons.mic : Icons.mic_none,
-                  color: _isListening ? Colors.white : Colors.white54,
+                  color: _isListening ? Colors.white : AppColors.primary,
                   size: 20,
                 ),
               ),
@@ -389,17 +406,23 @@ class _ChatbotDialogState extends State<ChatbotDialog>
           Expanded(
             child: TextField(
               controller: _textController,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
+              style: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
               decoration: InputDecoration(
                 hintText: _isListening ? 'Listening...' : 'Ask something...',
                 hintStyle: TextStyle(
-                    color: _isListening ? AppColors.alert.withValues(alpha: 0.7) : Colors.white24,
+                    color: _isListening ? AppColors.alert.withValues(alpha: 0.7) : AppColors.textSecondary,
                     fontSize: 14),
                 filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.07),
+                fillColor: AppColors.primaryLighter,
                 border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(20),
-                    borderSide: BorderSide.none),
+                    borderSide: const BorderSide(color: AppColors.border)),
+                enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    borderSide: const BorderSide(color: AppColors.border)),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    borderSide: const BorderSide(color: AppColors.primary, width: 1.5)),
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 isDense: true,
@@ -415,7 +438,7 @@ class _ChatbotDialogState extends State<ChatbotDialog>
             child: Container(
               height: 40,
               width: 40,
-              decoration: BoxDecoration(
+              decoration: const BoxDecoration(
                 shape: BoxShape.circle,
                 color: AppColors.primary,
               ),
@@ -447,7 +470,7 @@ class _MessageBubble extends StatelessWidget {
               padding: const EdgeInsets.all(6),
               margin: const EdgeInsets.only(top: 2),
               decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.15),
+                color: AppColors.primaryLight,
                 borderRadius: BorderRadius.circular(8),
               ),
               child: const Icon(Icons.smart_toy_rounded,
@@ -460,8 +483,8 @@ class _MessageBubble extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 color: isUser
-                    ? AppColors.primary.withValues(alpha: 0.2)
-                    : Colors.white.withValues(alpha: 0.07),
+                    ? AppColors.primary
+                    : AppColors.primaryLighter,
                 borderRadius: BorderRadius.only(
                   topLeft: const Radius.circular(16),
                   topRight: const Radius.circular(16),
@@ -470,8 +493,8 @@ class _MessageBubble extends StatelessWidget {
                 ),
                 border: Border.all(
                   color: isUser
-                      ? AppColors.primary.withValues(alpha: 0.3)
-                      : Colors.white.withValues(alpha: 0.06),
+                      ? AppColors.primary
+                      : AppColors.border,
                 ),
               ),
               child: _buildRichText(message.text, isUser),
@@ -484,33 +507,62 @@ class _MessageBubble extends StatelessWidget {
   }
 
   Widget _buildRichText(String text, bool isUser) {
-    // Simple markdown bold parsing: **text** → bold
-    final spans = <InlineSpan>[];
-    final parts = text.split('**');
-    for (int i = 0; i < parts.length; i++) {
-      if (i % 2 == 1) {
-        // Bold
-        spans.add(TextSpan(
-          text: parts[i],
-          style: TextStyle(
-            color: isUser ? Colors.white : Colors.white,
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            height: 1.5,
+    final baseColor = isUser ? Colors.white.withValues(alpha: 0.9) : AppColors.textPrimary;
+    final boldColor = isUser ? Colors.white : AppColors.textPrimary;
+    final dimColor = isUser ? Colors.white.withValues(alpha: 0.6) : AppColors.textSecondary;
+
+    // Split by lines to handle --- separators and line-level structures
+    final lines = text.split('\n');
+    final children = <Widget>[];
+
+    for (final line in lines) {
+      // Horizontal rule
+      if (line.trim() == '---') {
+        children.add(Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Divider(
+            color: isUser ? Colors.white24 : AppColors.border,
+            height: 1,
           ),
         ));
-      } else {
-        spans.add(TextSpan(
-          text: parts[i],
-          style: TextStyle(
-            color: isUser ? Colors.white.withValues(alpha: 0.9) : Colors.white70,
-            fontSize: 13,
-            height: 1.5,
-          ),
-        ));
+        continue;
       }
+
+      // Parse inline bold (**text**)
+      final spans = <InlineSpan>[];
+      final parts = line.split('**');
+      for (int i = 0; i < parts.length; i++) {
+        if (i % 2 == 1) {
+          spans.add(TextSpan(
+            text: parts[i],
+            style: TextStyle(
+              color: boldColor,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              height: 1.4,
+            ),
+          ));
+        } else {
+          // Dim indented data lines for bot responses
+          final isIndented = !isUser && parts[i].startsWith('  ');
+          spans.add(TextSpan(
+            text: parts[i],
+            style: TextStyle(
+              color: isIndented ? dimColor : baseColor,
+              fontSize: isIndented ? 12 : 13,
+              height: 1.4,
+            ),
+          ));
+        }
+      }
+      children.add(RichText(text: TextSpan(children: spans)));
     }
-    return RichText(text: TextSpan(children: spans));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: children,
+    );
   }
 }
 
@@ -556,7 +608,7 @@ class _TypingDotsState extends State<_TypingDots>
               width: 6,
               height: 6,
               decoration: BoxDecoration(
-                color: Colors.white54.withValues(alpha: opacity),
+                color: AppColors.primary.withValues(alpha: opacity),
                 shape: BoxShape.circle,
               ),
             );

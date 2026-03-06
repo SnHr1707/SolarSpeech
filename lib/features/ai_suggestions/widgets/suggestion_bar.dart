@@ -74,15 +74,12 @@ class _SuggestionBarState extends ConsumerState<SuggestionBar>
         bottom: isCompact ? 72 : 16,
       ),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF1E3A5F), Color(0xFF2563EB)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primary.withValues(alpha: 0.3),
+            color: AppColors.primary.withValues(alpha: 0.1),
             blurRadius: 16,
             offset: const Offset(0, 4),
           ),
@@ -99,17 +96,17 @@ class _SuggestionBarState extends ConsumerState<SuggestionBar>
                 Container(
                   padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.15),
+                    color: AppColors.primaryLight,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: const Icon(Icons.auto_awesome,
-                      color: Colors.white, size: 16),
+                      color: AppColors.primary, size: 16),
                 ),
                 const SizedBox(width: 8),
                 const Text(
                   'AI Suggestion',
                   style: TextStyle(
-                    color: Colors.white70,
+                    color: AppColors.primary,
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 0.5,
@@ -129,14 +126,14 @@ class _SuggestionBarState extends ConsumerState<SuggestionBar>
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: i == _currentIndex
-                              ? Colors.white
-                              : Colors.white38,
+                              ? AppColors.primary
+                              : AppColors.border,
                         ),
                       ),
                     ),
                   ),
                 IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white54, size: 18),
+                  icon: const Icon(Icons.close, color: AppColors.textSecondary, size: 18),
                   onPressed: () {
                     final ctx = ref.read(screenContextProvider);
                     if (ctx != null && suggestions.isNotEmpty) {
@@ -221,7 +218,7 @@ class _SuggestionCard extends StatelessWidget {
               child: Text(
                 suggestion.message,
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: AppColors.textPrimary,
                   fontSize: 13,
                   height: 1.35,
                 ),
@@ -233,14 +230,14 @@ class _SuggestionCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.1),
+                color: AppColors.primaryLight,
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(
                 suggestion.type == SuggestionType.report
                     ? Icons.edit_note
                     : Icons.arrow_forward_ios,
-                color: Colors.white70,
+                color: AppColors.primary,
                 size: 16,
               ),
             ),
@@ -253,15 +250,15 @@ class _SuggestionCard extends StatelessWidget {
   Color _typeColor(SuggestionType type) {
     switch (type) {
       case SuggestionType.navigation:
-        return Colors.lightBlueAccent;
+        return AppColors.primary;
       case SuggestionType.anomaly:
-        return Colors.orangeAccent;
+        return AppColors.warning;
       case SuggestionType.report:
-        return Colors.redAccent;
+        return AppColors.alert;
       case SuggestionType.insight:
-        return Colors.greenAccent;
+        return AppColors.active;
       case SuggestionType.comparison:
-        return Colors.purpleAccent;
+        return AppColors.chartPurple;
     }
   }
 }

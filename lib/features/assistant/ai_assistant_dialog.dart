@@ -19,6 +19,7 @@ class _AiAssistantDialogState extends State<AiAssistantDialog>
   final TextEditingController _textController = TextEditingController();
   bool _isProcessing = false;
   String _statusMessage = 'Tap the mic or type a command';
+  int _listenSession = 0;
   late AnimationController _pulseCtrl;
   late Animation<double> _pulseAnim;
 
@@ -41,11 +42,12 @@ class _AiAssistantDialogState extends State<AiAssistantDialog>
       onStatus: (status) {
         if (status == 'done' || status == 'notListening') {
           if (_isListening && mounted) {
+            final text = _textController.text;
             setState(() => _isListening = false);
             _pulseCtrl.stop();
             _pulseCtrl.reset();
-            if (_textController.text.isNotEmpty) {
-              _processCommand(_textController.text);
+            if (text.isNotEmpty) {
+              _processCommand(text);
             }
           }
         }
@@ -72,20 +74,24 @@ class _AiAssistantDialogState extends State<AiAssistantDialog>
         setState(() => _statusMessage = 'Speech not available on this device');
         return;
       }
+      // Cancel any prior session to avoid stale callbacks
+      _speech.cancel();
+      _listenSession++;
+      final currentSession = _listenSession;
       setState(() {
         _isListening = true;
-        _statusMessage = 'Listening…';
+        _statusMessage = 'Listening\u2026';
         _textController.clear();
       });
       _pulseCtrl.repeat(reverse: true);
       _speech.listen(
         onResult: (val) {
-          if (mounted) {
-            setState(() {
-              _textController.text = val.recognizedWords;
-              _statusMessage = 'Hearing: "${val.recognizedWords}"';
-            });
-          }
+          // Ignore results from a stale/prior session
+          if (!mounted || currentSession != _listenSession) return;
+          setState(() {
+            _textController.text = val.recognizedWords;
+            _statusMessage = 'Hearing: "${val.recognizedWords}"';
+          });
         },
         listenFor: const Duration(seconds: 10),
         pauseFor: const Duration(seconds: 3),
@@ -111,8 +117,7 @@ class _AiAssistantDialogState extends State<AiAssistantDialog>
     if (text.trim().isEmpty) return;
     setState(() {
       _isProcessing = true;
-      _statusMessage = 'Finding "$text"…';
-    });
+      _statusMessage = 'Finding "$text"…';      _textController.clear();    });
 
     final route = await LlmNavigationService.getRouteFromText(text);
 
@@ -133,7 +138,7 @@ class _AiAssistantDialogState extends State<AiAssistantDialog>
 
   @override
   void dispose() {
-    _speech.stop();
+    _speech.cancel();
     _textController.dispose();
     _pulseCtrl.dispose();
     super.dispose();
@@ -142,7 +147,7 @@ class _AiAssistantDialogState extends State<AiAssistantDialog>
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: const Color(0xFF1E293B),
+      backgroundColor: AppColors.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       child: Container(
         padding: const EdgeInsets.all(28),
@@ -154,37 +159,50 @@ class _AiAssistantDialogState extends State<AiAssistantDialog>
             Align(
               alignment: Alignment.topRight,
               child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white38, size: 20),
+                icon: const Icon(Icons.close, color: AppColors.textSecondary, size: 20),
                 onPressed: () => Navigator.of(context).pop(),
                 splashRadius: 18,
               ),
             ),
-            const Icon(Icons.auto_awesome, color: AppColors.primary, size: 44),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.primaryLight,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.auto_awesome, color: AppColors.primary, size: 44),
+            ),
             const SizedBox(height: 12),
             const Text('Voice Assistant',
                 style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
-                    color: Colors.white)),
+                    color: AppColors.textPrimary)),
             const SizedBox(height: 6),
             Text(
               _statusMessage,
-              style: const TextStyle(color: Colors.white54, fontSize: 13),
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
             // Text input
             TextField(
               controller: _textController,
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: AppColors.textPrimary),
               decoration: InputDecoration(
                 hintText: 'e.g. "Go to Inverter 1"',
-                hintStyle: const TextStyle(color: Colors.white24),
+                hintStyle: const TextStyle(color: AppColors.textSecondary),
                 filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.07),
+                fillColor: AppColors.primaryLighter,
                 border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide.none),
+                    borderSide: const BorderSide(color: AppColors.border)),
+                enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: AppColors.border)),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: AppColors.primary, width: 2)),
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 suffixIcon: IconButton(
@@ -257,9 +275,9 @@ class _AiAssistantDialogState extends State<AiAssistantDialog>
 
   Widget _chip(String label) {
     return ActionChip(
-      label: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-      backgroundColor: Colors.white.withValues(alpha: 0.08),
-      side: BorderSide.none,
+      label: Text(label, style: const TextStyle(color: AppColors.textPrimary, fontSize: 12)),
+      backgroundColor: AppColors.primaryLighter,
+      side: const BorderSide(color: AppColors.border),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       onPressed: () => _processCommand(label),
     );

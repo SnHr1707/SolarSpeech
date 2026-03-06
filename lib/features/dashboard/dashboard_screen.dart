@@ -326,19 +326,25 @@ class _DevicesPieChart extends ConsumerWidget {
                       runSpacing: 6,
                       children: [
                         for (int i = 0; i < entries.length; i++)
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                  width: 10,
-                                  height: 10,
-                                  decoration: BoxDecoration(
-                                      color: colors[i % colors.length],
-                                      shape: BoxShape.circle)),
-                              const SizedBox(width: 4),
-                              Text(entries[i].key,
-                                  style: const TextStyle(fontSize: 11)),
-                            ],
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 240),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                    width: 10,
+                                    height: 10,
+                                    decoration: BoxDecoration(
+                                        color: colors[i % colors.length],
+                                        shape: BoxShape.circle)),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(entries[i].key,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 11)),
+                                ),
+                              ],
+                            ),
                           ),
                       ],
                     ),

@@ -17,6 +17,24 @@ class ChatMessage {
 class ChatbotService {
   static final _supabase = Supabase.instance.client;
 
+  // Word → number mapping for speech-to-text
+  static final Map<String, int> _wordToNumber = {
+    'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4,
+    'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
+    'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13,
+    'fourteen': 14, 'fifteen': 15, 'sixteen': 16, 'seventeen': 17,
+    'eighteen': 18, 'nineteen': 19, 'twenty': 20,
+    'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5,
+  };
+
+  static final Map<String, int> _monthNames = {
+    'january': 1, 'jan': 1, 'february': 2, 'feb': 2, 'march': 3, 'mar': 3,
+    'april': 4, 'apr': 4, 'may': 5, 'june': 6, 'jun': 6,
+    'july': 7, 'jul': 7, 'august': 8, 'aug': 8, 'september': 9, 'sep': 9,
+    'october': 10, 'oct': 10, 'november': 11, 'nov': 11,
+    'december': 12, 'dec': 12,
+  };
+
   /// Process a user message and return a bot response.
   static Future<ChatMessage> processMessage(String userInput) async {
     final text = userInput.toLowerCase().trim();
@@ -25,7 +43,9 @@ class ChatbotService {
     }
 
     try {
-      // Detect intent
+      // Detect intent — order matters (more specific first)
+      if (_isTrendIntent(text)) return await _handleTrend(text);
+      if (_isHistoricalIntent(text)) return await _handleHistorical(text);
       if (_isCompareIntent(text)) return await _handleCompare(text);
       if (_isPercentageIntent(text)) return await _handlePercentage(text);
       if (_isSummaryIntent(text)) return await _handleSummary(text);
@@ -39,17 +59,19 @@ class ChatbotService {
       if (_isPlantIntent(text)) return await _handlePlantQuery(text);
       if (_isHelpIntent(text)) return _handleHelp();
 
-      // Fallback: try a general search
+      // Fallback
       return await _handleGeneral(text);
     } catch (e) {
       return ChatMessage(
-        text: 'Sorry, I ran into an issue fetching that data. Please try again.',
+        text: 'Sorry, I ran into an issue: ${e.toString().length > 100 ? e.toString().substring(0, 100) : e}. Please try again.',
         isUser: false,
       );
     }
   }
 
-  // ── Intent Detection ──
+  // ══════════════════════════════════════════════
+  //  Intent Detection
+  // ══════════════════════════════════════════════
 
   static bool _isCompareIntent(String t) =>
       t.contains('compare') || t.contains('versus') || t.contains(' vs ') ||
@@ -105,20 +127,687 @@ class ChatbotService {
   static bool _isAverageIntent(String t) =>
       t.contains('average') || t.contains('mean ') || t.contains('avg');
 
-  // ── Intent Handlers ──
+  static bool _isTrendIntent(String t) =>
+      t.contains('trend') || t.contains('improving') || t.contains('declining') ||
+      t.contains('going up') || t.contains('going down') ||
+      t.contains('increasing') || t.contains('decreasing') ||
+      t.contains('performance over');
+
+  static bool _isHistoricalIntent(String t) {
+    // Matches queries about specific time periods
+    if (t.contains('last') && (t.contains('day') || t.contains('week') ||
+        t.contains('month') || t.contains('hour'))) {
+      return true;
+    }
+    if (t.contains('past') && (t.contains('day') || t.contains('week') ||
+        t.contains('month') || t.contains('hour'))) {
+      return true;
+    }
+    if (t.contains('yesterday') || t.contains('this week') ||
+        t.contains('this month') || t.contains('today\'s')) {
+      return true;
+    }
+    if (RegExp(r'\b\d+\s*(days?|weeks?|months?|hours?)\b').hasMatch(t)) {
+      return true;
+    }
+    // Check for date patterns
+    if (_monthNames.keys.any((m) => t.contains(m))) {
+      // Only if it also has a device reference
+      if (t.contains('inverter') || t.contains('plant') || t.contains('mfm') ||
+          t.contains('sensor') || t.contains('temperature')) {
+        return true;
+      }
+    }
+    if (t.contains('show') && (t.contains('for') || t.contains('from') ||
+        t.contains('since') || t.contains('between'))) {
+      return true;
+    }
+    return false;
+  }
+
+  // ══════════════════════════════════════════════
+  //  Date / Time Range Extraction
+  // ══════════════════════════════════════════════
+
+  static ({DateTime start, DateTime end, String label})? _extractDateRange(String text) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    // "last N days/weeks/months/hours"
+    final lastN = RegExp(r'(?:last|past)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(days?|weeks?|months?|hours?)');
+    final lastNMatch = lastN.firstMatch(text);
+    if (lastNMatch != null) {
+      final numStr = lastNMatch.group(1)!;
+      final n = int.tryParse(numStr) ?? _wordToNumber[numStr] ?? 1;
+      final unit = lastNMatch.group(2)!;
+      if (unit.startsWith('day')) {
+        return (start: today.subtract(Duration(days: n)), end: now, label: 'last $n day${n > 1 ? 's' : ''}');
+      } else if (unit.startsWith('week')) {
+        return (start: today.subtract(Duration(days: n * 7)), end: now, label: 'last $n week${n > 1 ? 's' : ''}');
+      } else if (unit.startsWith('month')) {
+        return (start: DateTime(now.year, now.month - n, now.day), end: now, label: 'last $n month${n > 1 ? 's' : ''}');
+      } else if (unit.startsWith('hour')) {
+        return (start: now.subtract(Duration(hours: n)), end: now, label: 'last $n hour${n > 1 ? 's' : ''}');
+      }
+    }
+
+    // "yesterday"
+    if (text.contains('yesterday')) {
+      final yd = today.subtract(const Duration(days: 1));
+      return (start: yd, end: today, label: 'yesterday');
+    }
+
+    // "today"
+    if (text.contains('today')) {
+      return (start: today, end: now, label: 'today');
+    }
+
+    // "this week"
+    if (text.contains('this week')) {
+      final weekStart = today.subtract(Duration(days: today.weekday - 1));
+      return (start: weekStart, end: now, label: 'this week');
+    }
+
+    // "last week"
+    if (text.contains('last week')) {
+      final lastWeekEnd = today.subtract(Duration(days: today.weekday));
+      final lastWeekStart = lastWeekEnd.subtract(const Duration(days: 6));
+      return (start: lastWeekStart, end: lastWeekEnd, label: 'last week');
+    }
+
+    // "this month"
+    if (text.contains('this month')) {
+      return (start: DateTime(now.year, now.month, 1), end: now, label: 'this month');
+    }
+
+    // "last month"
+    if (text.contains('last month')) {
+      final lmStart = DateTime(now.year, now.month - 1, 1);
+      final lmEnd = DateTime(now.year, now.month, 1).subtract(const Duration(days: 1));
+      return (start: lmStart, end: lmEnd, label: 'last month');
+    }
+
+    // Specific month name: "in march", "for february"
+    for (final entry in _monthNames.entries) {
+      if (text.contains(entry.key)) {
+        final year = now.year;
+        final monthStart = DateTime(year, entry.value, 1);
+        final monthEnd = DateTime(year, entry.value + 1, 1).subtract(const Duration(days: 1));
+        return (start: monthStart, end: monthEnd.isAfter(now) ? now : monthEnd, label: entry.key);
+      }
+    }
+
+    return null;
+  }
+
+  static String _fmtDate(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  // ══════════════════════════════════════════════
+  //  Metric Detection
+  // ══════════════════════════════════════════════
+
+  static ({String field, String label}) _detectMetric(String text) {
+    if (text.contains('today') || text.contains('daily') || text.contains('e-today')) {
+      return (field: 'eTodayPower', label: 'Today Energy');
+    }
+    if (text.contains('total energy') || text.contains('e-total') || text.contains('cumulative')) {
+      return (field: 'eTotalPower', label: 'Total Energy');
+    }
+    if (text.contains('voltage') || text.contains('grid voltage')) {
+      return (field: 'activePower', label: 'Active Power (Voltage)');
+    }
+    if (text.contains('current') || text.contains('grid current')) {
+      return (field: 'activePower', label: 'Active Power (Current)');
+    }
+    // Default: active power
+    return (field: 'activePower', label: 'Active Power');
+  }
+
+  // ══════════════════════════════════════════════
+  //  Entity Resolution (robust)
+  // ══════════════════════════════════════════════
+
+  /// Robustly resolve device references from user text.
+  /// Handles: "inverter 1", "inverter one", "inv 3", full names, fuzzy matching.
+  static List<Map<String, dynamic>> _resolveDevices(String text, List<dynamic> items) {
+    final results = <Map<String, dynamic>>[];
+    final resolvedIds = <String>{};
+
+    // Step 1: Exact name match
+    for (final item in items) {
+      final name = (item['name'] ?? '').toString().toLowerCase();
+      if (name.isNotEmpty && text.contains(name)) {
+        final mapped = Map<String, dynamic>.from(item);
+        if (resolvedIds.add(mapped['id'].toString())) {
+          results.add(mapped);
+        }
+      }
+    }
+
+    // Step 2: Numeric references ("inverter 1", "sensor 3", etc.)
+    final allNums = RegExp(r'\b(\d+)\b').allMatches(text).toList();
+    // Also extract word-numbers
+    for (final entry in _wordToNumber.entries) {
+      final pat = RegExp(r'\b' + RegExp.escape(entry.key) + r'\b');
+      if (pat.hasMatch(text) && entry.value > 0) {
+        allNums.add(pat.firstMatch(text)!);
+      }
+    }
+
+    for (final m in allNums) {
+      int num;
+      final raw = m.group(0)!.toLowerCase();
+      num = int.tryParse(raw) ?? _wordToNumber[raw] ?? 0;
+      if (num < 1) continue;
+
+      Map<String, dynamic>? matched;
+
+      // Strategy A: Name contains this number with word boundary
+      final boundary = RegExp(r'(^|[\D_])' + num.toString() + r'($|[\D_])');
+      for (final item in items) {
+        final name = (item['name'] ?? '').toString();
+        if (boundary.hasMatch(name)) {
+          matched = Map<String, dynamic>.from(item);
+          break;
+        }
+      }
+
+      // Strategy B: Trailing number in name
+      if (matched == null) {
+        final trailingDigit = RegExp(r'(\d+)\s*$');
+        for (final item in items) {
+          final name = (item['name'] ?? '').toString();
+          final tm = trailingDigit.firstMatch(name);
+          if (tm != null && int.tryParse(tm.group(1)!) == num) {
+            matched = Map<String, dynamic>.from(item);
+            break;
+          }
+        }
+      }
+
+      // Strategy C: Use as 1-based list index
+      if (matched == null && num >= 1 && num <= items.length) {
+        matched = Map<String, dynamic>.from(items[num - 1]);
+      }
+
+      if (matched != null && resolvedIds.add(matched['id'].toString())) {
+        results.add(matched);
+      }
+    }
+
+    // Step 3: Fuzzy word overlap for remaining unmatched text
+    if (results.isEmpty) {
+      final textWords = text.split(RegExp(r'\s+')).where((w) => w.length > 2).toSet();
+      Map<String, dynamic>? best;
+      int bestOverlap = 0;
+      for (final item in items) {
+        final name = (item['name'] ?? '').toString().toLowerCase();
+        final nameWords = name.split(RegExp(r'[\s./,_\-]+')).where((w) => w.length > 2).toSet();
+        final overlap = textWords.intersection(nameWords).length;
+        if (overlap > bestOverlap) {
+          bestOverlap = overlap;
+          best = Map<String, dynamic>.from(item);
+        }
+      }
+      if (best != null) results.add(best);
+    }
+
+    return results;
+  }
+
+  /// Find a single entity by fuzzy name match
+  static Map<String, dynamic>? _findEntityByFuzzyName(String text, List<dynamic> items) {
+    final resolved = _resolveDevices(text, items);
+    return resolved.isNotEmpty ? resolved.first : null;
+  }
+
+  // ══════════════════════════════════════════════
+  //  Historical / Time-range Data Fetching
+  // ══════════════════════════════════════════════
+
+  /// Fetch inverter data points within a date range
+  static Future<List<Map<String, dynamic>>> _fetchInverterDataRange(
+      String inverterId, DateTime start, DateTime end) async {
+    final data = await _supabase
+        .from('InverterData')
+        .select()
+        .eq('inverterId', inverterId)
+        .gte('timestamp', start.toIso8601String())
+        .lte('timestamp', end.toIso8601String())
+        .order('timestamp', ascending: true);
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  /// Fetch MFM data points within a date range
+  static Future<List<Map<String, dynamic>>> _fetchMfmDataRange(
+      String mfmId, DateTime start, DateTime end) async {
+    final data = await _supabase
+        .from('MFMData')
+        .select()
+        .eq('mfmId', mfmId)
+        .gte('timestamp', start.toIso8601String())
+        .lte('timestamp', end.toIso8601String())
+        .order('timestamp', ascending: true);
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  /// Fetch temperature data within a date range
+  static Future<List<Map<String, dynamic>>> _fetchTempDataRange(
+      String deviceId, DateTime start, DateTime end) async {
+    final data = await _supabase
+        .from('TemperatureData')
+        .select()
+        .eq('deviceId', deviceId)
+        .gte('timestamp', start.toIso8601String())
+        .lte('timestamp', end.toIso8601String())
+        .order('timestamp', ascending: true);
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  /// Get the latest data for an inverter
+  static Future<Map<String, dynamic>?> _getLatestInverterData(String inverterId) async {
+    final latest = await _supabase
+        .from('InverterData')
+        .select()
+        .eq('inverterId', inverterId)
+        .order('timestamp', ascending: false)
+        .limit(1);
+    return latest.isNotEmpty ? Map<String, dynamic>.from(latest[0]) : null;
+  }
+
+  /// Get daily summary (aggregate) for an inverter over a date range
+  static Future<List<_DailySummary>> _getDailyInverterSummary(
+      String inverterId, DateTime start, DateTime end) async {
+    final data = await _fetchInverterDataRange(inverterId, start, end);
+    if (data.isEmpty) return [];
+
+    // Group by date
+    final byDate = <String, List<Map<String, dynamic>>>{};
+    for (final row in data) {
+      final ts = DateTime.tryParse(row['timestamp']?.toString() ?? '');
+      if (ts == null) continue;
+      final dateKey = _fmtDate(ts);
+      byDate.putIfAbsent(dateKey, () => []).add(row);
+    }
+
+    final summaries = <_DailySummary>[];
+    for (final entry in byDate.entries) {
+      final rows = entry.value;
+      double maxPower = 0, sumPower = 0, maxToday = 0;
+      for (final r in rows) {
+        final ap = (r['activePower'] as num?)?.toDouble() ?? 0;
+        final et = (r['eTodayPower'] as num?)?.toDouble() ?? 0;
+        if (ap > maxPower) maxPower = ap;
+        sumPower += ap;
+        if (et > maxToday) maxToday = et;
+      }
+      summaries.add(_DailySummary(
+        date: entry.key,
+        maxPower: maxPower,
+        avgPower: rows.isNotEmpty ? sumPower / rows.length : 0,
+        todayEnergy: maxToday,
+        dataPoints: rows.length,
+      ));
+    }
+    summaries.sort((a, b) => a.date.compareTo(b.date));
+    return summaries;
+  }
+
+  // ══════════════════════════════════════════════
+  //  Intent Handlers
+  // ══════════════════════════════════════════════
+
+  static Future<ChatMessage> _handleHistorical(String text) async {
+    final dateRange = _extractDateRange(text);
+
+    // Detect device type
+    if (text.contains('inverter') || text.contains('converter')) {
+      return await _handleInverterHistorical(text, dateRange);
+    }
+    if (text.contains('mfm') || text.contains('meter')) {
+      return await _handleMfmHistorical(text, dateRange);
+    }
+    if (text.contains('temperature') || text.contains('temp')) {
+      return await _handleTempHistorical(text, dateRange);
+    }
+    if (text.contains('plant') || text.contains('site')) {
+      return await _handlePlantHistorical(text, dateRange);
+    }
+    // Default: try inverter data
+    return await _handleInverterHistorical(text, dateRange);
+  }
+
+  static Future<ChatMessage> _handleInverterHistorical(
+      String text, ({DateTime start, DateTime end, String label})? dateRange) async {
+    final inverters = await _supabase.from('Inverter').select('id, name, plantId');
+    if (inverters.isEmpty) {
+      return ChatMessage(text: 'No inverters found in the system.', isUser: false);
+    }
+
+    final mentioned = _resolveDevices(text, inverters);
+    final targets = mentioned.isNotEmpty ? mentioned : inverters;
+    final metric = _detectMetric(text);
+
+    if (dateRange == null) {
+      // Default to last 7 days
+      final now = DateTime.now();
+      dateRange = (
+        start: DateTime(now.year, now.month, now.day).subtract(const Duration(days: 7)),
+        end: now,
+        label: 'last 7 days',
+      );
+    }
+
+    final buffer = StringBuffer();
+    if (mentioned.isNotEmpty) {
+      buffer.writeln('**${metric.label} Data — ${dateRange.label}**\n');
+    } else {
+      buffer.writeln('**System ${metric.label} — ${dateRange.label}**\n');
+    }
+
+    for (final inv in targets) {
+      final invId = inv['id'] as String;
+      final name = inv['name'] ?? 'Unknown';
+
+      final dailySummary = await _getDailyInverterSummary(invId, dateRange.start, dateRange.end);
+
+      if (dailySummary.isEmpty) {
+        buffer.writeln('**$name**: No data available for ${dateRange.label}\n');
+        continue;
+      }
+
+      buffer.writeln('**$name**');
+      for (final day in dailySummary) {
+        buffer.writeln('  ${day.date}: Peak ${day.maxPower.toStringAsFixed(1)} kW | '
+            'Avg ${day.avgPower.toStringAsFixed(1)} kW | '
+            'Energy ${day.todayEnergy.toStringAsFixed(1)} kWh');
+      }
+
+      // Summary stats
+      final totalEnergy = dailySummary.fold<double>(0, (s, d) => s + d.todayEnergy);
+      final peakPower = dailySummary.fold<double>(0, (s, d) => d.maxPower > s ? d.maxPower : s);
+      final avgPower = dailySummary.fold<double>(0, (s, d) => s + d.avgPower) / dailySummary.length;
+      buffer.writeln('  **Total Energy: ${totalEnergy.toStringAsFixed(1)} kWh**');
+      buffer.writeln('  **Peak Power: ${peakPower.toStringAsFixed(1)} kW**');
+      buffer.writeln('  **Avg Power: ${avgPower.toStringAsFixed(1)} kW**');
+      buffer.writeln('');
+    }
+
+    return ChatMessage(text: buffer.toString().trim(), isUser: false);
+  }
+
+  static Future<ChatMessage> _handleMfmHistorical(
+      String text, ({DateTime start, DateTime end, String label})? dateRange) async {
+    final mfms = await _supabase.from('MFM').select('id, name');
+    if (mfms.isEmpty) return ChatMessage(text: 'No MFM sensors found.', isUser: false);
+
+    final mentioned = _resolveDevices(text, mfms);
+    final targets = mentioned.isNotEmpty ? mentioned : mfms;
+
+    if (dateRange == null) {
+      final now = DateTime.now();
+      dateRange = (
+        start: DateTime(now.year, now.month, now.day).subtract(const Duration(days: 7)),
+        end: now,
+        label: 'last 7 days',
+      );
+    }
+
+    final buffer = StringBuffer();
+    buffer.writeln('**MFM Data — ${dateRange.label}**\n');
+
+    for (final mfm in targets) {
+      final mfmId = mfm['id'] as String;
+      final name = mfm['name'] ?? 'Unknown';
+      final data = await _fetchMfmDataRange(mfmId, dateRange.start, dateRange.end);
+
+      if (data.isEmpty) {
+        buffer.writeln('**$name**: No data for ${dateRange.label}\n');
+        continue;
+      }
+
+      double maxPower = 0, sumPower = 0;
+      for (final r in data) {
+        final p = (r['totalPower'] as num?)?.toDouble() ?? 0;
+        if (p > maxPower) maxPower = p;
+        sumPower += p;
+      }
+
+      buffer.writeln('**$name** (${data.length} readings)');
+      buffer.writeln('  Peak Power: ${maxPower.toStringAsFixed(1)} kW');
+      buffer.writeln('  Avg Power: ${(sumPower / data.length).toStringAsFixed(1)} kW');
+      buffer.writeln('');
+    }
+
+    return ChatMessage(text: buffer.toString().trim(), isUser: false);
+  }
+
+  static Future<ChatMessage> _handleTempHistorical(
+      String text, ({DateTime start, DateTime end, String label})? dateRange) async {
+    final temps = await _supabase.from('TemperatureDevice').select('id, name');
+    if (temps.isEmpty) return ChatMessage(text: 'No temperature sensors found.', isUser: false);
+
+    final mentioned = _resolveDevices(text, temps);
+    final targets = mentioned.isNotEmpty ? mentioned : temps;
+
+    if (dateRange == null) {
+      final now = DateTime.now();
+      dateRange = (
+        start: DateTime(now.year, now.month, now.day).subtract(const Duration(days: 7)),
+        end: now,
+        label: 'last 7 days',
+      );
+    }
+
+    final buffer = StringBuffer();
+    buffer.writeln('**Temperature Data — ${dateRange.label}**\n');
+
+    for (final temp in targets) {
+      final tempId = temp['id'] as String;
+      final name = temp['name'] ?? 'Unknown';
+      final data = await _fetchTempDataRange(tempId, dateRange.start, dateRange.end);
+
+      if (data.isEmpty) {
+        buffer.writeln('**$name**: No data for ${dateRange.label}\n');
+        continue;
+      }
+
+      double maxT = -999, minT = 999, sumT = 0;
+      for (final r in data) {
+        final v = (r['value'] as num?)?.toDouble() ?? 0;
+        if (v > maxT) maxT = v;
+        if (v < minT) minT = v;
+        sumT += v;
+      }
+
+      buffer.writeln('**$name** (${data.length} readings)');
+      buffer.writeln('  Max: ${maxT.toStringAsFixed(1)} °C');
+      buffer.writeln('  Min: ${minT.toStringAsFixed(1)} °C');
+      buffer.writeln('  Avg: ${(sumT / data.length).toStringAsFixed(1)} °C');
+      buffer.writeln('');
+    }
+
+    return ChatMessage(text: buffer.toString().trim(), isUser: false);
+  }
+
+  static Future<ChatMessage> _handlePlantHistorical(
+      String text, ({DateTime start, DateTime end, String label})? dateRange) async {
+    final plants = await _supabase.from('Plant').select('id, name');
+    final inverters = await _supabase.from('Inverter').select('id, name, plantId');
+
+    final mentioned = _resolveDevices(text, plants);
+    final targets = mentioned.isNotEmpty ? mentioned : plants;
+
+    if (dateRange == null) {
+      final now = DateTime.now();
+      dateRange = (
+        start: DateTime(now.year, now.month, now.day).subtract(const Duration(days: 7)),
+        end: now,
+        label: 'last 7 days',
+      );
+    }
+
+    final buffer = StringBuffer();
+    buffer.writeln('**Plant Data — ${dateRange.label}**\n');
+
+    for (final plant in targets) {
+      final pid = plant['id'] as String;
+      final name = plant['name'] ?? 'Unknown';
+      final plantInvs = inverters.where((i) => i['plantId'] == pid).toList();
+
+      double totalEnergy = 0, peakPower = 0;
+      int totalPoints = 0;
+
+      for (final inv in plantInvs) {
+        final summary = await _getDailyInverterSummary(
+            inv['id'] as String, dateRange.start, dateRange.end);
+        for (final day in summary) {
+          totalEnergy += day.todayEnergy;
+          if (day.maxPower > peakPower) peakPower = day.maxPower;
+          totalPoints += day.dataPoints;
+        }
+      }
+
+      buffer.writeln('**$name** (${plantInvs.length} inverters)');
+      buffer.writeln('  Total Energy: ${totalEnergy.toStringAsFixed(1)} kWh');
+      buffer.writeln('  Peak Power: ${peakPower.toStringAsFixed(1)} kW');
+      buffer.writeln('  Data Points: $totalPoints');
+      buffer.writeln('');
+    }
+
+    return ChatMessage(text: buffer.toString().trim(), isUser: false);
+  }
+
+  // ── Trend Handler ──
+
+  static Future<ChatMessage> _handleTrend(String text) async {
+    final now = DateTime.now();
+    final dateRange = _extractDateRange(text) ?? (
+      start: DateTime(now.year, now.month, now.day).subtract(const Duration(days: 7)),
+      end: now,
+      label: 'last 7 days',
+    );
+
+    if (text.contains('temperature') || text.contains('temp')) {
+      return await _handleTempTrend(text, dateRange);
+    }
+
+    // Default: inverter power trend
+    final inverters = await _supabase.from('Inverter').select('id, name, plantId');
+    final mentioned = _resolveDevices(text, inverters);
+    final targets = mentioned.isNotEmpty ? mentioned : inverters;
+
+    final buffer = StringBuffer();
+    buffer.writeln('**Power Trend — ${dateRange.label}**\n');
+
+    for (final inv in targets) {
+      final invId = inv['id'] as String;
+      final name = inv['name'] ?? 'Unknown';
+      final summary = await _getDailyInverterSummary(invId, dateRange.start, dateRange.end);
+
+      if (summary.length < 2) {
+        buffer.writeln('**$name**: Not enough data to show trend\n');
+        continue;
+      }
+
+      buffer.writeln('**$name**');
+      for (final day in summary) {
+        final bar = '█' * (day.avgPower / 5).clamp(1, 20).round();
+        buffer.writeln('  ${day.date}: $bar ${day.avgPower.toStringAsFixed(1)} kW');
+      }
+
+      // Calculate trend direction
+      final firstHalf = summary.sublist(0, summary.length ~/ 2);
+      final secondHalf = summary.sublist(summary.length ~/ 2);
+      final avgFirst = firstHalf.fold<double>(0, (s, d) => s + d.avgPower) / firstHalf.length;
+      final avgSecond = secondHalf.fold<double>(0, (s, d) => s + d.avgPower) / secondHalf.length;
+      final change = avgSecond - avgFirst;
+      final pctChange = avgFirst > 0 ? (change / avgFirst * 100) : 0.0;
+
+      if (change > 0) {
+        buffer.writeln('  📈 **Increasing** by ${pctChange.toStringAsFixed(1)}%');
+      } else if (change < 0) {
+        buffer.writeln('  📉 **Decreasing** by ${pctChange.abs().toStringAsFixed(1)}%');
+      } else {
+        buffer.writeln('  ➡ **Stable**');
+      }
+      buffer.writeln('');
+    }
+
+    return ChatMessage(text: buffer.toString().trim(), isUser: false);
+  }
+
+  static Future<ChatMessage> _handleTempTrend(
+      String text, ({DateTime start, DateTime end, String label}) dateRange) async {
+    final temps = await _supabase.from('TemperatureDevice').select('id, name');
+    final mentioned = _resolveDevices(text, temps);
+    final targets = mentioned.isNotEmpty ? mentioned : temps;
+
+    final buffer = StringBuffer();
+    buffer.writeln('**Temperature Trend — ${dateRange.label}**\n');
+
+    for (final temp in targets) {
+      final tempId = temp['id'] as String;
+      final name = temp['name'] ?? 'Unknown';
+      final data = await _fetchTempDataRange(tempId, dateRange.start, dateRange.end);
+
+      if (data.length < 2) {
+        buffer.writeln('**$name**: Not enough data for trend\n');
+        continue;
+      }
+
+      // Group by date
+      final byDate = <String, List<double>>{};
+      for (final r in data) {
+        final ts = DateTime.tryParse(r['timestamp']?.toString() ?? '');
+        if (ts == null) continue;
+        final key = _fmtDate(ts);
+        byDate.putIfAbsent(key, () => []).add((r['value'] as num?)?.toDouble() ?? 0);
+      }
+
+      buffer.writeln('**$name**');
+      final sortedDates = byDate.keys.toList()..sort();
+      for (final date in sortedDates) {
+        final vals = byDate[date]!;
+        final avg = vals.fold<double>(0, (s, v) => s + v) / vals.length;
+        buffer.writeln('  $date: ${avg.toStringAsFixed(1)} °C');
+      }
+      buffer.writeln('');
+    }
+
+    return ChatMessage(text: buffer.toString().trim(), isUser: false);
+  }
+
+  // ── Compare Handler ──
 
   static Future<ChatMessage> _handleCompare(String text) async {
-    // Detect what's being compared
+    // Check for time-range comparison
+    final dateRange = _extractDateRange(text);
+
     if (text.contains('plant') || text.contains('site')) {
-      return await _comparePlants(text);
+      return dateRange != null
+          ? await _handlePlantHistorical(text, dateRange)
+          : await _comparePlants(text);
     }
     if (text.contains('inverter')) {
-      return await _compareInverters(text);
+      return dateRange != null
+          ? await _compareInvertersOverTime(text, dateRange)
+          : await _compareInverters(text);
     }
     if (text.contains('sensor') || text.contains('mfm') || text.contains('temperature')) {
       return await _compareSensors(text);
     }
-    // Default: compare plants
+
+    // Auto-detect from numbers + context
+    final inverters = await _supabase.from('Inverter').select('id, name, plantId');
+    final mentionedInv = _resolveDevices(text, inverters);
+    if (mentionedInv.length >= 2) {
+      return dateRange != null
+          ? await _compareInvertersOverTime(text, dateRange)
+          : await _compareInverters(text);
+    }
+
     return await _comparePlants(text);
   }
 
@@ -128,7 +817,6 @@ class ChatbotService {
       return ChatMessage(text: 'No plants found in the system.', isUser: false);
     }
 
-    // Get energy data for each plant
     final buffer = StringBuffer();
     buffer.writeln('**Plant Comparison**\n');
 
@@ -139,26 +827,21 @@ class ChatbotService {
       plantInvCount[pid] = (plantInvCount[pid] ?? 0) + 1;
     }
 
-    // Get latest data for each inverter per plant
     final plantEnergy = <String, double>{};
     final plantTodayEnergy = <String, double>{};
+    final plantActivePower = <String, double>{};
     for (final inv in inverters) {
       final invId = inv['id'] as String;
       final pid = inv['plantId']?.toString() ?? '';
-      try {
-        final latest = await _supabase
-            .from('InverterData')
-            .select('eTotalPower, eTodayPower, activePower')
-            .eq('inverterId', invId)
-            .order('timestamp', ascending: false)
-            .limit(1);
-        if (latest.isNotEmpty) {
-          final eTotal = (latest[0]['eTotalPower'] as num?)?.toDouble() ?? 0;
-          final eToday = (latest[0]['eTodayPower'] as num?)?.toDouble() ?? 0;
-          plantEnergy[pid] = (plantEnergy[pid] ?? 0) + eTotal;
-          plantTodayEnergy[pid] = (plantTodayEnergy[pid] ?? 0) + eToday;
-        }
-      } catch (_) {}
+      final d = await _getLatestInverterData(invId);
+      if (d != null) {
+        final eTotal = (d['eTotalPower'] as num?)?.toDouble() ?? 0;
+        final eToday = (d['eTodayPower'] as num?)?.toDouble() ?? 0;
+        final active = (d['activePower'] as num?)?.toDouble() ?? 0;
+        plantEnergy[pid] = (plantEnergy[pid] ?? 0) + eTotal;
+        plantTodayEnergy[pid] = (plantTodayEnergy[pid] ?? 0) + eToday;
+        plantActivePower[pid] = (plantActivePower[pid] ?? 0) + active;
+      }
     }
 
     for (final plant in plants) {
@@ -167,14 +850,15 @@ class ChatbotService {
       final invCount = plantInvCount[pid] ?? 0;
       final totalE = plantEnergy[pid] ?? 0;
       final todayE = plantTodayEnergy[pid] ?? 0;
+      final activeP = plantActivePower[pid] ?? 0;
       buffer.writeln('**$name**');
       buffer.writeln('  Inverters: $invCount');
-      buffer.writeln('  Total Energy: ${totalE.toStringAsFixed(1)} kWh');
+      buffer.writeln('  Active Power: ${activeP.toStringAsFixed(1)} kW');
       buffer.writeln('  Today Energy: ${todayE.toStringAsFixed(1)} kWh');
+      buffer.writeln('  Total Energy: ${totalE.toStringAsFixed(1)} kWh');
       buffer.writeln('');
     }
 
-    // Determine best performer
     if (plantTodayEnergy.isNotEmpty) {
       final bestPid = plantTodayEnergy.entries
           .reduce((a, b) => a.value > b.value ? a : b).key;
@@ -191,38 +875,95 @@ class ChatbotService {
       return ChatMessage(text: 'No inverters found.', isUser: false);
     }
 
-    // Extract specific inverter names/numbers from text
-    final mentioned = _extractMentionedNames(text, inverters);
+    final mentioned = _resolveDevices(text, inverters);
     final toCompare = mentioned.isNotEmpty ? mentioned : inverters.take(5).toList();
 
     final buffer = StringBuffer();
     buffer.writeln('**Inverter Comparison**\n');
 
+    final dataMap = <String, Map<String, dynamic>>{};
+
     for (final inv in toCompare) {
       final invId = inv['id'] as String;
       final name = inv['name'] ?? 'Unknown';
-      try {
-        final latest = await _supabase
-            .from('InverterData')
-            .select('activePower, eTodayPower, eTotalPower, totalPvVoltage, totalPvCurrent')
-            .eq('inverterId', invId)
-            .order('timestamp', ascending: false)
-            .limit(1);
-        if (latest.isNotEmpty) {
-          final d = latest[0];
-          buffer.writeln('**$name**');
-          buffer.writeln('  Active Power: ${_fmtNum(d['activePower'])} kW');
-          buffer.writeln('  Today Energy: ${_fmtNum(d['eTodayPower'])} kWh');
-          buffer.writeln('  Total Energy: ${_fmtNum(d['eTotalPower'])} kWh');
-          buffer.writeln('  PV Voltage: ${_fmtNum(d['totalPvVoltage'])} V');
-          buffer.writeln('  PV Current: ${_fmtNum(d['totalPvCurrent'])} A');
-          buffer.writeln('');
-        } else {
-          buffer.writeln('**$name**: No data available\n');
-        }
-      } catch (_) {
-        buffer.writeln('**$name**: Error fetching data\n');
+      final d = await _getLatestInverterData(invId);
+      if (d != null) {
+        dataMap[name] = d;
+        buffer.writeln('**$name**');
+        buffer.writeln('  Active Power: ${_fmtNum(d['activePower'])} kW');
+        buffer.writeln('  Today Energy: ${_fmtNum(d['eTodayPower'])} kWh');
+        buffer.writeln('  Total Energy: ${_fmtNum(d['eTotalPower'])} kWh');
+        buffer.writeln('');
+      } else {
+        buffer.writeln('**$name**: No data available\n');
       }
+    }
+
+    // Add winner summary if comparing 2+ with data
+    if (dataMap.length >= 2) {
+      buffer.writeln('---');
+      final bestByPower = dataMap.entries.reduce((a, b) =>
+          ((a.value['activePower'] as num?)?.toDouble() ?? 0) >=
+          ((b.value['activePower'] as num?)?.toDouble() ?? 0) ? a : b);
+      final bestByToday = dataMap.entries.reduce((a, b) =>
+          ((a.value['eTodayPower'] as num?)?.toDouble() ?? 0) >=
+          ((b.value['eTodayPower'] as num?)?.toDouble() ?? 0) ? a : b);
+      buffer.writeln('**Best Active Power:** ${bestByPower.key} (${_fmtNum(bestByPower.value['activePower'])} kW)');
+      buffer.writeln('**Best Today Energy:** ${bestByToday.key} (${_fmtNum(bestByToday.value['eTodayPower'])} kWh)');
+    }
+
+    return ChatMessage(text: buffer.toString().trim(), isUser: false);
+  }
+
+  static Future<ChatMessage> _compareInvertersOverTime(
+      String text, ({DateTime start, DateTime end, String label}) dateRange) async {
+    final inverters = await _supabase.from('Inverter').select('id, name, plantId');
+    if (inverters.isEmpty) {
+      return ChatMessage(text: 'No inverters found.', isUser: false);
+    }
+
+    final mentioned = _resolveDevices(text, inverters);
+    final toCompare = mentioned.isNotEmpty ? mentioned : inverters.take(5).toList();
+
+    final buffer = StringBuffer();
+    buffer.writeln('**Inverter Comparison — ${dateRange.label}**\n');
+
+    final invSummaries = <String, List<_DailySummary>>{};
+
+    for (final inv in toCompare) {
+      final invId = inv['id'] as String;
+      final name = inv['name'] ?? 'Unknown';
+      final summary = await _getDailyInverterSummary(invId, dateRange.start, dateRange.end);
+      invSummaries[name] = summary;
+
+      if (summary.isEmpty) {
+        buffer.writeln('**$name**: No data for ${dateRange.label}\n');
+        continue;
+      }
+
+      final totalEnergy = summary.fold<double>(0, (s, d) => s + d.todayEnergy);
+      final peakPower = summary.fold<double>(0, (s, d) => d.maxPower > s ? d.maxPower : s);
+      final avgPower = summary.fold<double>(0, (s, d) => s + d.avgPower) / summary.length;
+
+      buffer.writeln('**$name**');
+      buffer.writeln('  Total Energy: ${totalEnergy.toStringAsFixed(1)} kWh');
+      buffer.writeln('  Peak Power: ${peakPower.toStringAsFixed(1)} kW');
+      buffer.writeln('  Avg Power: ${avgPower.toStringAsFixed(1)} kW');
+      buffer.writeln('  Days with data: ${summary.length}');
+      buffer.writeln('');
+    }
+
+    // Winner summary
+    final withData = invSummaries.entries.where((e) => e.value.isNotEmpty).toList();
+    if (withData.length >= 2) {
+      buffer.writeln('---');
+      final bestEnergy = withData.reduce((a, b) {
+        final aTotal = a.value.fold<double>(0, (s, d) => s + d.todayEnergy);
+        final bTotal = b.value.fold<double>(0, (s, d) => s + d.todayEnergy);
+        return aTotal >= bTotal ? a : b;
+      });
+      final totalE = bestEnergy.value.fold<double>(0, (s, d) => s + d.todayEnergy);
+      buffer.writeln('**Best Overall:** ${bestEnergy.key} with ${totalE.toStringAsFixed(1)} kWh total');
     }
 
     return ChatMessage(text: buffer.toString().trim(), isUser: false);
@@ -231,10 +972,7 @@ class ChatbotService {
   static Future<ChatMessage> _compareSensors(String text) async {
     final isMfm = text.contains('mfm') || text.contains('meter');
     final isTemp = text.contains('temperature') || text.contains('thermal');
-
-    if (isMfm || (!isTemp)) {
-      return await _compareMfms();
-    }
+    if (isMfm || (!isTemp)) return await _compareMfms();
     return await _compareTemps();
   }
 
@@ -248,24 +986,22 @@ class ChatbotService {
     for (final mfm in mfms) {
       final mfmId = mfm['id'] as String;
       final name = mfm['name'] ?? 'Unknown';
-      try {
-        final latest = await _supabase
-            .from('MFMData')
-            .select('totalPower, l1nVoltage, l2nVoltage, l3nVoltage, frequency')
-            .eq('mfmId', mfmId)
-            .order('timestamp', ascending: false)
-            .limit(1);
-        if (latest.isNotEmpty) {
-          final d = latest[0];
-          buffer.writeln('**$name**');
-          buffer.writeln('  Total Power: ${_fmtNum(d['totalPower'])} kW');
-          buffer.writeln('  L1 Voltage: ${_fmtNum(d['l1nVoltage'])} V');
-          buffer.writeln('  L2 Voltage: ${_fmtNum(d['l2nVoltage'])} V');
-          buffer.writeln('  L3 Voltage: ${_fmtNum(d['l3nVoltage'])} V');
-          buffer.writeln('  Frequency: ${_fmtNum(d['frequency'])} Hz');
-          buffer.writeln('');
-        }
-      } catch (_) {}
+      final latest = await _supabase
+          .from('MFMData')
+          .select()
+          .eq('mfmId', mfmId)
+          .order('timestamp', ascending: false)
+          .limit(1);
+      if (latest.isNotEmpty) {
+        final d = latest[0];
+        buffer.writeln('**$name**');
+        buffer.writeln('  Total Power: ${_fmtNum(d['totalPower'])} kW');
+        buffer.writeln('  L1 Voltage: ${_fmtNum(d['l1nVoltage'])} V');
+        buffer.writeln('  L2 Voltage: ${_fmtNum(d['l2nVoltage'])} V');
+        buffer.writeln('  L3 Voltage: ${_fmtNum(d['l3nVoltage'])} V');
+        buffer.writeln('  Frequency: ${_fmtNum(d['frequency'])} Hz');
+        buffer.writeln('');
+      }
     }
 
     return ChatMessage(text: buffer.toString().trim(), isUser: false);
@@ -281,17 +1017,15 @@ class ChatbotService {
     for (final temp in temps) {
       final tempId = temp['id'] as String;
       final name = temp['name'] ?? 'Unknown';
-      try {
-        final latest = await _supabase
-            .from('TemperatureData')
-            .select('value')
-            .eq('deviceId', tempId)
-            .order('timestamp', ascending: false)
-            .limit(1);
-        if (latest.isNotEmpty) {
-          buffer.writeln('**$name**: ${_fmtNum(latest[0]['value'])} °C');
-        }
-      } catch (_) {}
+      final latest = await _supabase
+          .from('TemperatureData')
+          .select()
+          .eq('deviceId', tempId)
+          .order('timestamp', ascending: false)
+          .limit(1);
+      if (latest.isNotEmpty) {
+        buffer.writeln('**$name**: ${_fmtNum(latest[0]['value'])} °C');
+      }
     }
 
     return ChatMessage(text: buffer.toString().trim(), isUser: false);
@@ -301,36 +1035,25 @@ class ChatbotService {
     final buffer = StringBuffer();
     buffer.writeln('**System Overview**\n');
 
-    // Plants
     final plants = await _supabase.from('Plant').select('id, name');
     buffer.writeln('**Plants:** ${plants.length}');
 
-    // Inverters
     final inverters = await _supabase.from('Inverter').select('id');
     buffer.writeln('**Inverters:** ${inverters.length}');
 
-    // Sensors
     final mfms = await _supabase.from('MFM').select('id');
     final temps = await _supabase.from('TemperatureDevice').select('id');
     final wfms = await _supabase.from('WFM').select('id');
     buffer.writeln('**Sensors:** ${mfms.length} MFM, ${temps.length} Temperature, ${wfms.length} WMS');
 
-    // Energy totals
     double totalEnergy = 0, todayEnergy = 0, totalCapacity = 0;
     for (final inv in inverters) {
-      try {
-        final latest = await _supabase
-            .from('InverterData')
-            .select('eTotalPower, eTodayPower, activePower')
-            .eq('inverterId', inv['id'] as String)
-            .order('timestamp', ascending: false)
-            .limit(1);
-        if (latest.isNotEmpty) {
-          totalEnergy += (latest[0]['eTotalPower'] as num?)?.toDouble() ?? 0;
-          todayEnergy += (latest[0]['eTodayPower'] as num?)?.toDouble() ?? 0;
-          totalCapacity += (latest[0]['activePower'] as num?)?.toDouble() ?? 0;
-        }
-      } catch (_) {}
+      final d = await _getLatestInverterData(inv['id'] as String);
+      if (d != null) {
+        totalEnergy += (d['eTotalPower'] as num?)?.toDouble() ?? 0;
+        todayEnergy += (d['eTodayPower'] as num?)?.toDouble() ?? 0;
+        totalCapacity += (d['activePower'] as num?)?.toDouble() ?? 0;
+      }
     }
 
     buffer.writeln('');
@@ -350,17 +1073,15 @@ class ChatbotService {
       final temps = await _supabase.from('TemperatureDevice').select('id, name');
       final readings = <String, double>{};
       for (final t in temps) {
-        try {
-          final latest = await _supabase
-              .from('TemperatureData')
-              .select('value')
-              .eq('deviceId', t['id'] as String)
-              .order('timestamp', ascending: false)
-              .limit(1);
-          if (latest.isNotEmpty) {
-            readings[t['name'] ?? 'Unknown'] = (latest[0]['value'] as num?)?.toDouble() ?? 0;
-          }
-        } catch (_) {}
+        final latest = await _supabase
+            .from('TemperatureData')
+            .select()
+            .eq('deviceId', t['id'] as String)
+            .order('timestamp', ascending: false)
+            .limit(1);
+        if (latest.isNotEmpty) {
+          readings[t['name'] ?? 'Unknown'] = (latest[0]['value'] as num?)?.toDouble() ?? 0;
+        }
       }
       if (readings.isEmpty) return ChatMessage(text: 'No temperature data available.', isUser: false);
 
@@ -376,19 +1097,13 @@ class ChatbotService {
 
     // Default: energy/power comparison across inverters
     final inverters = await _supabase.from('Inverter').select('id, name');
+    final metric = _detectMetric(text);
     final readings = <String, double>{};
     for (final inv in inverters) {
-      try {
-        final latest = await _supabase
-            .from('InverterData')
-            .select('activePower')
-            .eq('inverterId', inv['id'] as String)
-            .order('timestamp', ascending: false)
-            .limit(1);
-        if (latest.isNotEmpty) {
-          readings[inv['name'] ?? 'Unknown'] = (latest[0]['activePower'] as num?)?.toDouble() ?? 0;
-        }
-      } catch (_) {}
+      final d = await _getLatestInverterData(inv['id'] as String);
+      if (d != null) {
+        readings[inv['name'] ?? 'Unknown'] = (d[metric.field] as num?)?.toDouble() ?? 0;
+      }
     }
     if (readings.isEmpty) return ChatMessage(text: 'No inverter data available.', isUser: false);
 
@@ -397,10 +1112,10 @@ class ChatbotService {
     final label = isTop ? 'Highest' : 'Lowest';
     final top3 = sorted.take(3);
     final buffer = StringBuffer();
-    buffer.writeln('**$label Active Power:**\n');
+    buffer.writeln('**$label ${metric.label}:**\n');
     int rank = 1;
     for (final entry in top3) {
-      buffer.writeln('$rank. **${entry.key}**: ${entry.value.toStringAsFixed(1)} kW');
+      buffer.writeln('$rank. **${entry.key}**: ${entry.value.toStringAsFixed(1)}');
       rank++;
     }
     return ChatMessage(text: buffer.toString().trim(), isUser: false);
@@ -412,27 +1127,18 @@ class ChatbotService {
     final inactiveNames = <String>[];
 
     for (final inv in inverters) {
-      try {
-        final latest = await _supabase
-            .from('InverterData')
-            .select('activePower, timestamp')
-            .eq('inverterId', inv['id'] as String)
-            .order('timestamp', ascending: false)
-            .limit(1);
-        if (latest.isNotEmpty) {
-          final power = (latest[0]['activePower'] as num?)?.toDouble() ?? 0;
-          if (power > 0) {
-            active++;
-          } else {
-            inactive++;
-            inactiveNames.add(inv['name'] ?? 'Unknown');
-          }
+      final d = await _getLatestInverterData(inv['id'] as String);
+      if (d != null) {
+        final power = (d['activePower'] as num?)?.toDouble() ?? 0;
+        if (power > 0) {
+          active++;
         } else {
           inactive++;
           inactiveNames.add(inv['name'] ?? 'Unknown');
         }
-      } catch (_) {
+      } else {
         inactive++;
+        inactiveNames.add(inv['name'] ?? 'Unknown');
       }
     }
 
@@ -471,7 +1177,6 @@ class ChatbotService {
       return ChatMessage(text: buffer.toString().trim(), isUser: false);
     }
 
-    // Count everything
     final plants = await _supabase.from('Plant').select('id');
     final inverters = await _supabase.from('Inverter').select('id');
     final mfms = await _supabase.from('MFM').select('id');
@@ -489,36 +1194,33 @@ class ChatbotService {
     double totalToday = 0, totalAll = 0, totalActive = 0;
 
     final buffer = StringBuffer();
+    final dateRange = _extractDateRange(text);
 
-    // Check if asking about specific inverter
-    final mentioned = _extractMentionedNames(text, inverters);
+    // If there's a date range, use historical handler
+    if (dateRange != null) {
+      return await _handleInverterHistorical(text, dateRange);
+    }
+
+    final mentioned = _resolveDevices(text, inverters);
     final targets = mentioned.isNotEmpty ? mentioned : inverters;
 
     for (final inv in targets) {
-      try {
-        final latest = await _supabase
-            .from('InverterData')
-            .select('eTotalPower, eTodayPower, activePower')
-            .eq('inverterId', inv['id'] as String)
-            .order('timestamp', ascending: false)
-            .limit(1);
-        if (latest.isNotEmpty) {
-          final d = latest[0];
-          final eTotal = (d['eTotalPower'] as num?)?.toDouble() ?? 0;
-          final eToday = (d['eTodayPower'] as num?)?.toDouble() ?? 0;
-          final active = (d['activePower'] as num?)?.toDouble() ?? 0;
-          totalAll += eTotal;
-          totalToday += eToday;
-          totalActive += active;
+      final d = await _getLatestInverterData(inv['id'] as String);
+      if (d != null) {
+        final eTotal = (d['eTotalPower'] as num?)?.toDouble() ?? 0;
+        final eToday = (d['eTodayPower'] as num?)?.toDouble() ?? 0;
+        final active = (d['activePower'] as num?)?.toDouble() ?? 0;
+        totalAll += eTotal;
+        totalToday += eToday;
+        totalActive += active;
 
-          if (mentioned.isNotEmpty) {
-            buffer.writeln('**${inv['name']}**');
-            buffer.writeln('  Active Power: ${active.toStringAsFixed(1)} kW');
-            buffer.writeln('  Today Energy: ${eToday.toStringAsFixed(1)} kWh');
-            buffer.writeln('  Total Energy: ${eTotal.toStringAsFixed(1)} kWh');
-          }
+        if (mentioned.isNotEmpty) {
+          buffer.writeln('**${inv['name']}**');
+          buffer.writeln('  Active Power: ${active.toStringAsFixed(1)} kW');
+          buffer.writeln('  Today Energy: ${eToday.toStringAsFixed(1)} kWh');
+          buffer.writeln('  Total Energy: ${eTotal.toStringAsFixed(1)} kWh');
         }
-      } catch (_) {}
+      }
     }
 
     if (mentioned.isEmpty) {
@@ -532,13 +1234,19 @@ class ChatbotService {
   }
 
   static Future<ChatMessage> _handleSensorQuery(String text) async {
-    if (text.contains('mfm') || text.contains('meter')) {
-      return await _compareMfms();
+    final dateRange = _extractDateRange(text);
+    if (dateRange != null) {
+      if (text.contains('mfm') || text.contains('meter')) {
+        return await _handleMfmHistorical(text, dateRange);
+      }
+      if (text.contains('temperature') || text.contains('thermal')) {
+        return await _handleTempHistorical(text, dateRange);
+      }
     }
-    if (text.contains('temperature') || text.contains('thermal')) {
-      return await _compareTemps();
-    }
-    // General sensor overview
+
+    if (text.contains('mfm') || text.contains('meter')) return await _compareMfms();
+    if (text.contains('temperature') || text.contains('thermal')) return await _compareTemps();
+
     final mfms = await _supabase.from('MFM').select('id');
     final temps = await _supabase.from('TemperatureDevice').select('id');
     final wfms = await _supabase.from('WFM').select('id');
@@ -549,10 +1257,18 @@ class ChatbotService {
   }
 
   static Future<ChatMessage> _handleInverterQuery(String text) async {
+    final dateRange = _extractDateRange(text);
+    if (dateRange != null) {
+      return await _handleInverterHistorical(text, dateRange);
+    }
     return await _compareInverters(text);
   }
 
   static Future<ChatMessage> _handlePlantQuery(String text) async {
+    final dateRange = _extractDateRange(text);
+    if (dateRange != null) {
+      return await _handlePlantHistorical(text, dateRange);
+    }
     return await _comparePlants(text);
   }
 
@@ -560,7 +1276,11 @@ class ChatbotService {
     return ChatMessage(
       text: '''**Hi! I'm your Solar Dashboard Assistant.** Here's what I can do:
 
-**Compare** — "Compare all plants", "Compare inverters", "Compare MFM sensors"
+**Compare** — "Compare inverter 1 and inverter 3", "Compare all plants", "Compare MFM sensors"
+
+**Historical Data** — "Show power for inverter 2 last 5 days", "Inverter 1 data for last week", "Plant energy this month"
+
+**Trends** — "Power trend for inverter 1 last 10 days", "Temperature trend this week", "Is inverter 3 improving?"
 
 **Percentage** — "What percentage of Goa plant power is from inverter 1?", "Show contribution of each plant"
 
@@ -576,9 +1296,11 @@ class ChatbotService {
 
 **Summary** — "Give me an overview", "Dashboard summary"
 
-**Sensors** — "Show MFM readings", "Temperature sensor data"
+**Sensors** — "Show MFM readings last 3 days", "Temperature sensor data"
 
-**Navigate** — "Open inverter 1", "Go to Goa plant", "Show MFM 1 on March 1st", "Inverter 1 first march 2026 total power graph"
+**Time Ranges** — "last 5 days", "this week", "last month", "yesterday", "past 2 weeks"
+
+**Navigate** — "Open inverter 1", "Go to Goa plant", "Show MFM 1 chart"
 
 Just ask naturally — I'll figure out what you need!''',
       isUser: false,
@@ -586,8 +1308,13 @@ Just ask naturally — I'll figure out what you need!''',
   }
 
   static Future<ChatMessage> _handleGeneral(String text) async {
-    // Try to find anything relevant
-    // Check if it matches a device name
+    // Check for date range — might be a historical query without explicit device type
+    final dateRange = _extractDateRange(text);
+    if (dateRange != null) {
+      return await _handleHistorical(text);
+    }
+
+    // Try to find anything relevant by name
     final plants = await _supabase.from('Plant').select('id, name');
     for (final p in plants) {
       if (text.contains((p['name'] ?? '').toString().toLowerCase())) {
@@ -602,156 +1329,68 @@ Just ask naturally — I'll figure out what you need!''',
       }
     }
 
+    // Check if there are number references that could be inverters
+    final nums = RegExp(r'\b\d+\b').allMatches(text);
+    if (nums.isNotEmpty && inverters.isNotEmpty) {
+      final resolved = _resolveDevices(text, inverters);
+      if (resolved.isNotEmpty) {
+        return await _compareInverters(text);
+      }
+    }
+
     return ChatMessage(
-      text: "I'm not sure what you're looking for. Try asking about **plants**, **inverters**, **sensors**, **energy**, or say **help** to see what I can do!",
+      text: "I'm not sure what you're looking for. Try asking about **plants**, **inverters**, **sensors**, **energy**, or say **help** to see what I can do!\n\nYou can also ask about **historical data** (e.g., \"show inverter 1 data last 5 days\") or **compare** devices.",
       isUser: false,
     );
-  }
-
-  // ── Helpers ──
-
-  static String _fmtNum(dynamic value) {
-    if (value == null) return '0';
-    return (value as num).toDouble().toStringAsFixed(1);
-  }
-
-  /// Find entity by fuzzy word overlap (e.g. "goa" matches "M/S. GOA SHIPYARD LIMITED")
-  static Map<String, dynamic>? _findEntityByFuzzyName(
-      String text, List<dynamic> items) {
-    for (final item in items) {
-      final name = (item['name'] ?? '').toString().toLowerCase();
-      if (name.isNotEmpty && text.contains(name)) {
-        return Map<String, dynamic>.from(item);
-      }
-    }
-    final textWords =
-        text.split(RegExp(r'\s+')).where((w) => w.length > 2).toSet();
-    Map<String, dynamic>? best;
-    int bestOverlap = 0;
-    for (final item in items) {
-      final name = (item['name'] ?? '').toString().toLowerCase();
-      final nameWords =
-          name.split(RegExp(r'[\s./,_\-]+')).where((w) => w.length > 2).toSet();
-      final overlap = textWords.intersection(nameWords).length;
-      if (overlap > bestOverlap) {
-        bestOverlap = overlap;
-        best = Map<String, dynamic>.from(item);
-      }
-    }
-    return bestOverlap > 0 ? best : null;
-  }
-
-  static List<Map<String, dynamic>> _extractMentionedNames(
-      String text, List<dynamic> items) {
-    final results = <Map<String, dynamic>>[];
-    for (final item in items) {
-      final name = (item['name'] ?? '').toString().toLowerCase();
-      if (name.isNotEmpty && text.contains(name)) {
-        results.add(Map<String, dynamic>.from(item));
-      }
-    }
-    // Also check for numeric references like "inverter 1", "inverter 2"
-    final numMatch = RegExp(r'\b(\d+)\b').allMatches(text);
-    final trailingDigit = RegExp(r'(\d+)\s*$');
-    for (final m in numMatch) {
-      final num = int.tryParse(m.group(1)!) ?? 0;
-      if (num < 1) continue;
-      // First: find an item whose name contains this number
-      Map<String, dynamic>? matched;
-      final boundary = RegExp(r'(^|[\D_])' + RegExp.escape(m.group(1)!) + r'($|[\D_])');
-      for (final item in items) {
-        final name = (item['name'] ?? '').toString().toLowerCase();
-        if (boundary.hasMatch(name)) {
-          matched = Map<String, dynamic>.from(item);
-          break;
-        }
-      }
-      // Try trailing number in name (e.g. GRP_INNVERTER_1 → 1)
-      matched ??= (() {
-        for (final item in items) {
-          final name = (item['name'] ?? '').toString();
-          final tm = trailingDigit.firstMatch(name);
-          if (tm != null && int.tryParse(tm.group(1)!) == num) {
-            return Map<String, dynamic>.from(item);
-          }
-        }
-        return null;
-      })();
-      // Fallback: use as list index
-      matched ??= (num >= 1 && num <= items.length)
-          ? Map<String, dynamic>.from(items[num - 1])
-          : null;
-      if (matched != null && !results.any((r) => r['id'] == matched!['id'])) {
-        results.add(matched);
-      }
-    }
-    return results;
   }
 
   // ── Percentage Handler ──
 
   static Future<ChatMessage> _handlePercentage(String text) async {
     final plants = await _supabase.from('Plant').select('id, name');
-    final inverters =
-        await _supabase.from('Inverter').select('id, name, plantId');
+    final inverters = await _supabase.from('Inverter').select('id, name, plantId');
 
     final mentionedPlant = _findEntityByFuzzyName(text, plants);
-    final mentionedInverters = _extractMentionedNames(text, inverters);
+    final mentionedInverters = _resolveDevices(text, inverters);
 
-    // Detect metric
-    String metricField = 'eTotalPower';
-    String metricLabel = 'Total Energy';
-    if (text.contains('today') || text.contains('daily')) {
-      metricField = 'eTodayPower';
-      metricLabel = 'Today Energy';
-    } else if (text.contains('active') || text.contains('live')) {
-      metricField = 'activePower';
-      metricLabel = 'Active Power';
-    }
+    final metric = _detectMetric(text);
+    final metricField = metric.field;
+    final metricLabel = metric.label;
 
     // Case 1: Percentage of a plant's total by specific inverter(s)
     if (mentionedPlant != null && mentionedInverters.isNotEmpty) {
       final plantId = mentionedPlant['id'] as String;
-      final plantInvs =
-          inverters.where((i) => i['plantId'] == plantId).toList();
+      final plantInvs = inverters.where((i) => i['plantId'] == plantId).toList();
       double plantTotal = 0;
       final invValues = <String, double>{};
       for (final inv in plantInvs) {
-        try {
-          final latest = await _supabase
-              .from('InverterData')
-              .select(metricField)
-              .eq('inverterId', inv['id'] as String)
-              .order('timestamp', ascending: false)
-              .limit(1);
-          if (latest.isNotEmpty) {
-            final val =
-                (latest[0][metricField] as num?)?.toDouble() ?? 0;
-            plantTotal += val;
-            if (mentionedInverters.any((m) => m['id'] == inv['id'])) {
-              invValues[inv['name'] ?? 'Unknown'] = val;
-            }
+        final latest = await _supabase
+            .from('InverterData')
+            .select()
+            .eq('inverterId', inv['id'] as String)
+            .order('timestamp', ascending: false)
+            .limit(1);
+        if (latest.isNotEmpty) {
+          final val = (latest[0][metricField] as num?)?.toDouble() ?? 0;
+          plantTotal += val;
+          if (mentionedInverters.any((m) => m['id'] == inv['id'])) {
+            invValues[inv['name'] ?? 'Unknown'] = val;
           }
-        } catch (_) {}
+        }
       }
       if (plantTotal > 0 && invValues.isNotEmpty) {
         final buf = StringBuffer();
-        buf.writeln(
-            '**$metricLabel Contribution to ${mentionedPlant['name']}**\n');
+        buf.writeln('**$metricLabel Contribution to ${mentionedPlant['name']}**\n');
         double invSum = 0;
         for (final e in invValues.entries) {
           final pct = (e.value / plantTotal * 100);
           invSum += e.value;
-          buf.writeln(
-              '**${e.key}**: ${e.value.toStringAsFixed(1)} kWh \u2014 **${pct.toStringAsFixed(1)}%**');
+          buf.writeln('**${e.key}**: ${e.value.toStringAsFixed(1)} kWh — **${pct.toStringAsFixed(1)}%**');
         }
-        buf.writeln(
-            '\nPlant Total: ${plantTotal.toStringAsFixed(1)} kWh');
+        buf.writeln('\nPlant Total: ${plantTotal.toStringAsFixed(1)} kWh');
         if (invValues.length == 1) {
-          final pct =
-              (invSum / plantTotal * 100).toStringAsFixed(1);
-          buf.writeln(
-              '\n**${invValues.keys.first}** contributes **$pct%** of ${mentionedPlant['name']}\'s $metricLabel.');
+          final pct = (invSum / plantTotal * 100).toStringAsFixed(1);
+          buf.writeln('\n**${invValues.keys.first}** contributes **$pct%** of ${mentionedPlant['name']}\'s $metricLabel.');
         }
         return ChatMessage(text: buf.toString().trim(), isUser: false);
       }
@@ -762,33 +1401,28 @@ Just ask naturally — I'll figure out what you need!''',
       double systemTotal = 0;
       final invValues = <String, double>{};
       for (final inv in inverters) {
-        try {
-          final latest = await _supabase
-              .from('InverterData')
-              .select(metricField)
-              .eq('inverterId', inv['id'] as String)
-              .order('timestamp', ascending: false)
-              .limit(1);
-          if (latest.isNotEmpty) {
-            final val =
-                (latest[0][metricField] as num?)?.toDouble() ?? 0;
-            systemTotal += val;
-            if (mentionedInverters.any((m) => m['id'] == inv['id'])) {
-              invValues[inv['name'] ?? 'Unknown'] = val;
-            }
+        final latest = await _supabase
+            .from('InverterData')
+            .select()
+            .eq('inverterId', inv['id'] as String)
+            .order('timestamp', ascending: false)
+            .limit(1);
+        if (latest.isNotEmpty) {
+          final val = (latest[0][metricField] as num?)?.toDouble() ?? 0;
+          systemTotal += val;
+          if (mentionedInverters.any((m) => m['id'] == inv['id'])) {
+            invValues[inv['name'] ?? 'Unknown'] = val;
           }
-        } catch (_) {}
+        }
       }
       if (systemTotal > 0 && invValues.isNotEmpty) {
         final buf = StringBuffer();
         buf.writeln('**$metricLabel Contribution (System-wide)**\n');
         for (final e in invValues.entries) {
           final pct = (e.value / systemTotal * 100);
-          buf.writeln(
-              '**${e.key}**: ${e.value.toStringAsFixed(1)} kWh \u2014 **${pct.toStringAsFixed(1)}%** of system total');
+          buf.writeln('**${e.key}**: ${e.value.toStringAsFixed(1)} kWh — **${pct.toStringAsFixed(1)}%** of system total');
         }
-        buf.writeln(
-            '\nSystem Total: ${systemTotal.toStringAsFixed(1)} kWh');
+        buf.writeln('\nSystem Total: ${systemTotal.toStringAsFixed(1)} kWh');
         return ChatMessage(text: buf.toString().trim(), isUser: false);
       }
     }
@@ -799,22 +1433,18 @@ Just ask naturally — I'll figure out what you need!''',
       final plantEnergy = <String, double>{};
       for (final plant in plants) {
         final pid = plant['id'] as String;
-        final plantInvs =
-            inverters.where((i) => i['plantId'] == pid).toList();
+        final plantInvs = inverters.where((i) => i['plantId'] == pid).toList();
         double pTotal = 0;
         for (final inv in plantInvs) {
-          try {
-            final latest = await _supabase
-                .from('InverterData')
-                .select(metricField)
-                .eq('inverterId', inv['id'] as String)
-                .order('timestamp', ascending: false)
-                .limit(1);
-            if (latest.isNotEmpty) {
-              pTotal +=
-                  (latest[0][metricField] as num?)?.toDouble() ?? 0;
-            }
-          } catch (_) {}
+          final latest = await _supabase
+              .from('InverterData')
+              .select()
+              .eq('inverterId', inv['id'] as String)
+              .order('timestamp', ascending: false)
+              .limit(1);
+          if (latest.isNotEmpty) {
+            pTotal += (latest[0][metricField] as num?)?.toDouble() ?? 0;
+          }
         }
         plantEnergy[plant['name'] ?? 'Unknown'] = pTotal;
         systemTotal += pTotal;
@@ -824,18 +1454,15 @@ Just ask naturally — I'll figure out what you need!''',
         buf.writeln('**Plant $metricLabel Breakdown**\n');
         for (final e in plantEnergy.entries) {
           final pct = (e.value / systemTotal * 100);
-          buf.writeln(
-              '**${e.key}**: ${e.value.toStringAsFixed(1)} kWh \u2014 **${pct.toStringAsFixed(1)}%**');
+          buf.writeln('**${e.key}**: ${e.value.toStringAsFixed(1)} kWh — **${pct.toStringAsFixed(1)}%**');
         }
-        buf.writeln(
-            '\nSystem Total: ${systemTotal.toStringAsFixed(1)} kWh');
+        buf.writeln('\nSystem Total: ${systemTotal.toStringAsFixed(1)} kWh');
         return ChatMessage(text: buf.toString().trim(), isUser: false);
       }
     }
 
     return ChatMessage(
-      text:
-          'I couldn\'t find enough data to calculate percentages. Try specifying a plant and inverter, e.g. "What percentage of Goa plant power is from inverter 1?"',
+      text: 'I couldn\'t find enough data to calculate percentages. Try specifying a plant and inverter, e.g. "What percentage of Goa plant power is from inverter 1?"',
       isUser: false,
     );
   }
@@ -843,76 +1470,98 @@ Just ask naturally — I'll figure out what you need!''',
   // ── Average Handler ──
 
   static Future<ChatMessage> _handleAverage(String text) async {
+    final dateRange = _extractDateRange(text);
+
     if (text.contains('temperature') || text.contains('temp')) {
-      final temps =
-          await _supabase.from('TemperatureDevice').select('id, name');
+      final temps = await _supabase.from('TemperatureDevice').select('id, name');
       double sum = 0;
       int count = 0;
       final buf = StringBuffer();
       buf.writeln('**Average Temperature Readings**\n');
+
       for (final t in temps) {
-        try {
+        if (dateRange != null) {
+          final data = await _fetchTempDataRange(t['id'] as String, dateRange.start, dateRange.end);
+          if (data.isNotEmpty) {
+            final avg = data.fold<double>(0, (s, r) => s + ((r['value'] as num?)?.toDouble() ?? 0)) / data.length;
+            sum += avg;
+            count++;
+            buf.writeln('**${t['name']}**: ${avg.toStringAsFixed(1)} °C (avg over ${dateRange.label})');
+          }
+        } else {
           final latest = await _supabase
               .from('TemperatureData')
-              .select('value')
+              .select()
               .eq('deviceId', t['id'] as String)
               .order('timestamp', ascending: false)
               .limit(1);
           if (latest.isNotEmpty) {
-            final val =
-                (latest[0]['value'] as num?)?.toDouble() ?? 0;
+            final val = (latest[0]['value'] as num?)?.toDouble() ?? 0;
             sum += val;
             count++;
-            buf.writeln('**${t['name']}**: ${val.toStringAsFixed(1)} \u00b0C');
+            buf.writeln('**${t['name']}**: ${val.toStringAsFixed(1)} °C');
           }
-        } catch (_) {}
+        }
       }
       if (count > 0) {
-        buf.writeln(
-            '\n**Average: ${(sum / count).toStringAsFixed(1)} \u00b0C** across $count sensors');
+        buf.writeln('\n**Average: ${(sum / count).toStringAsFixed(1)} °C** across $count sensors');
       }
       return ChatMessage(text: buf.toString().trim(), isUser: false);
     }
 
     // Default: average power across inverters
-    final inverters =
-        await _supabase.from('Inverter').select('id, name');
-    String metricField = 'activePower';
-    String metricLabel = 'Active Power';
-    if (text.contains('total') || text.contains('e-total')) {
-      metricField = 'eTotalPower';
-      metricLabel = 'Total Energy';
-    } else if (text.contains('today') || text.contains('daily')) {
-      metricField = 'eTodayPower';
-      metricLabel = 'Today Energy';
-    }
+    final inverters = await _supabase.from('Inverter').select('id, name');
+    final metric = _detectMetric(text);
 
     double sum = 0;
     int count = 0;
     for (final inv in inverters) {
-      try {
-        final latest = await _supabase
-            .from('InverterData')
-            .select(metricField)
-            .eq('inverterId', inv['id'] as String)
-            .order('timestamp', ascending: false)
-            .limit(1);
-        if (latest.isNotEmpty) {
-          sum += (latest[0][metricField] as num?)?.toDouble() ?? 0;
+      if (dateRange != null) {
+        final data = await _fetchInverterDataRange(inv['id'] as String, dateRange.start, dateRange.end);
+        if (data.isNotEmpty) {
+          final avg = data.fold<double>(0, (s, r) => s + ((r[metric.field] as num?)?.toDouble() ?? 0)) / data.length;
+          sum += avg;
           count++;
         }
-      } catch (_) {}
+      } else {
+        final d = await _getLatestInverterData(inv['id'] as String);
+        if (d != null) {
+          sum += (d[metric.field] as num?)?.toDouble() ?? 0;
+          count++;
+        }
+      }
     }
 
     if (count > 0) {
+      final periodLabel = dateRange != null ? ' (${dateRange.label})' : '';
       return ChatMessage(
-        text:
-            '**Average $metricLabel** across $count inverters: **${(sum / count).toStringAsFixed(1)} kWh**\n\nTotal: ${sum.toStringAsFixed(1)} kWh',
+        text: '**Average ${metric.label}$periodLabel** across $count inverters: **${(sum / count).toStringAsFixed(1)}**\n\nTotal: ${sum.toStringAsFixed(1)}',
         isUser: false,
       );
     }
-    return ChatMessage(
-        text: 'No inverter data available to calculate average.',
-        isUser: false);
+    return ChatMessage(text: 'No inverter data available to calculate average.', isUser: false);
   }
+
+  // ── Helpers ──
+
+  static String _fmtNum(dynamic value) {
+    if (value == null) return '0';
+    return (value as num).toDouble().toStringAsFixed(1);
+  }
+}
+
+class _DailySummary {
+  final String date;
+  final double maxPower;
+  final double avgPower;
+  final double todayEnergy;
+  final int dataPoints;
+
+  _DailySummary({
+    required this.date,
+    required this.maxPower,
+    required this.avgPower,
+    required this.todayEnergy,
+    required this.dataPoints,
+  });
 }

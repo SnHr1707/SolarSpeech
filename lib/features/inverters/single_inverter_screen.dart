@@ -64,6 +64,29 @@ class _SingleInverterScreenState extends ConsumerState<SingleInverterScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant SingleInverterScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.inverterId != widget.inverterId ||
+        oldWidget.initialChart != widget.initialChart ||
+        oldWidget.initialDate != widget.initialDate) {
+      setState(() {
+        if (widget.initialDate != null) {
+          final parsed = DateTime.tryParse(widget.initialDate!);
+          _selectedDate = parsed ?? DateTime(2026, 3, 5);
+        } else {
+          _selectedDate = DateTime(2026, 3, 5);
+        }
+        if (widget.initialChart != null) {
+          final match = _chartOptions.where(
+            (o) => o.toLowerCase() == widget.initialChart!.toLowerCase(),
+          );
+          if (match.isNotEmpty) _selectedChart = match.first;
+        }
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final invAsync = ref.watch(inverterByIdProvider(widget.inverterId));
     final dataAsync = ref.watch(inverterDataByDateProvider(

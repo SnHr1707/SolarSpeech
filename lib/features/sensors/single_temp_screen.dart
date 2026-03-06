@@ -34,6 +34,22 @@ class _SingleTempScreenState extends ConsumerState<SingleTempScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant SingleTempScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.deviceId != widget.deviceId ||
+        oldWidget.initialDate != widget.initialDate) {
+      setState(() {
+        if (widget.initialDate != null) {
+          final parsed = DateTime.tryParse(widget.initialDate!);
+          _selectedDate = parsed ?? DateTime(2026, 3, 5);
+        } else {
+          _selectedDate = DateTime(2026, 3, 5);
+        }
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final deviceAsync = ref.watch(tempDeviceByIdProvider(widget.deviceId));
     final dataAsync = ref.watch(tempDataByDateProvider(

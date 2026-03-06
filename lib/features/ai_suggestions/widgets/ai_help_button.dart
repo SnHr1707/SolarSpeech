@@ -76,15 +76,12 @@ class _AiHelpButtonState extends ConsumerState<AiHelpButton>
                 margin: const EdgeInsets.only(bottom: 12),
                 constraints: const BoxConstraints(maxHeight: 420),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF1E293B), Color(0xFF0F172A)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppColors.border),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.25),
+                      color: AppColors.primary.withValues(alpha: 0.12),
                       blurRadius: 24,
                       offset: const Offset(0, 8),
                     ),
@@ -95,7 +92,7 @@ class _AiHelpButtonState extends ConsumerState<AiHelpButton>
                   children: [
                     _buildHeader(),
                     const Divider(
-                        height: 1, color: Colors.white12, thickness: 1),
+                        height: 1, color: AppColors.border, thickness: 1),
                     // Suggestions list (scrollable)
                     suggestionsAsync.when(
                       data: (suggestions) => suggestions.isEmpty
@@ -115,10 +112,10 @@ class _AiHelpButtonState extends ConsumerState<AiHelpButton>
                       error: (_, __) => _buildEmpty(),
                     ),
                     const Divider(
-                        height: 1, color: Colors.white12, thickness: 1),
+                        height: 1, color: AppColors.border, thickness: 1),
                     _buildChatbotRow(),
                     const Divider(
-                        height: 1, color: Colors.white10, thickness: 1),
+                        height: 1, color: AppColors.border, thickness: 1),
                     _buildVoiceRow(),
                   ],
                 ),
@@ -140,7 +137,7 @@ class _AiHelpButtonState extends ConsumerState<AiHelpButton>
           Container(
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.2),
+              color: AppColors.primaryLight,
               borderRadius: BorderRadius.circular(8),
             ),
             child:
@@ -150,14 +147,14 @@ class _AiHelpButtonState extends ConsumerState<AiHelpButton>
           const Text(
             'AI Suggestions',
             style: TextStyle(
-              color: Colors.white,
+              color: AppColors.textPrimary,
               fontSize: 14,
               fontWeight: FontWeight.w600,
             ),
           ),
           const Spacer(),
           IconButton(
-            icon: const Icon(Icons.close, color: Colors.white38, size: 18),
+            icon: const Icon(Icons.close, color: AppColors.textSecondary, size: 18),
             onPressed: _toggle,
             splashRadius: 16,
             padding: EdgeInsets.zero,
@@ -173,12 +170,12 @@ class _AiHelpButtonState extends ConsumerState<AiHelpButton>
       padding: EdgeInsets.symmetric(vertical: 24, horizontal: 16),
       child: Row(
         children: [
-          Icon(Icons.check_circle_outline, color: Colors.white24, size: 20),
+          Icon(Icons.check_circle_outline, color: AppColors.textSecondary, size: 20),
           SizedBox(width: 10),
           Expanded(
             child: Text(
               'No suggestions for this page right now.',
-              style: TextStyle(color: Colors.white38, fontSize: 13),
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
             ),
           ),
         ],
@@ -193,7 +190,7 @@ class _AiHelpButtonState extends ConsumerState<AiHelpButton>
         padding: const EdgeInsets.symmetric(vertical: 8),
         itemCount: suggestions.length,
         separatorBuilder: (_, __) =>
-            const Divider(height: 1, color: Colors.white10, indent: 16, endIndent: 16),
+            const Divider(height: 1, color: AppColors.border, indent: 16, endIndent: 16),
         itemBuilder: (context, index) {
           final s = suggestions[index];
           return _SuggestionTile(
@@ -221,10 +218,10 @@ class _AiHelpButtonState extends ConsumerState<AiHelpButton>
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                color: AppColors.active.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.smart_toy_rounded, color: Color(0xFF10B981), size: 18),
+              child: const Icon(Icons.smart_toy_rounded, color: AppColors.active, size: 18),
             ),
             const SizedBox(width: 12),
             const Expanded(
@@ -233,15 +230,15 @@ class _AiHelpButtonState extends ConsumerState<AiHelpButton>
                 children: [
                   Text('Chat Assistant',
                       style: TextStyle(
-                          color: Colors.white,
+                          color: AppColors.textPrimary,
                           fontSize: 13,
                           fontWeight: FontWeight.w500)),
                   Text('Ask questions, compare data',
-                      style: TextStyle(color: Colors.white38, fontSize: 11)),
+                      style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: Colors.white24, size: 20),
+            const Icon(Icons.chevron_right, color: AppColors.textSecondary, size: 20),
           ],
         ),
       ),
@@ -268,7 +265,7 @@ class _AiHelpButtonState extends ConsumerState<AiHelpButton>
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.15),
+                color: AppColors.primaryLight,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: const Icon(Icons.mic, color: AppColors.primary, size: 18),
@@ -280,15 +277,15 @@ class _AiHelpButtonState extends ConsumerState<AiHelpButton>
                 children: [
                   Text('Voice Assistant',
                       style: TextStyle(
-                          color: Colors.white,
+                          color: AppColors.textPrimary,
                           fontSize: 13,
                           fontWeight: FontWeight.w500)),
                   Text('Tap to speak a command',
-                      style: TextStyle(color: Colors.white38, fontSize: 11)),
+                      style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: Colors.white24, size: 20),
+            const Icon(Icons.chevron_right, color: AppColors.textSecondary, size: 20),
           ],
         ),
       ),
@@ -402,7 +399,7 @@ class _SuggestionTile extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: _typeColor(suggestion.type).withValues(alpha: 0.15),
+                color: _typeColor(suggestion.type).withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(suggestion.icon,
@@ -413,7 +410,7 @@ class _SuggestionTile extends StatelessWidget {
               child: Text(
                 suggestion.message,
                 style: const TextStyle(
-                  color: Colors.white70,
+                  color: AppColors.textPrimary,
                   fontSize: 12.5,
                   height: 1.4,
                 ),
@@ -426,7 +423,7 @@ class _SuggestionTile extends StatelessWidget {
                 suggestion.type == SuggestionType.report
                     ? Icons.edit_note
                     : Icons.arrow_forward_ios,
-                color: Colors.white24,
+                color: AppColors.textSecondary,
                 size: 14,
               ),
             ),
@@ -439,15 +436,15 @@ class _SuggestionTile extends StatelessWidget {
   Color _typeColor(SuggestionType type) {
     switch (type) {
       case SuggestionType.navigation:
-        return Colors.lightBlueAccent;
+        return AppColors.primary;
       case SuggestionType.anomaly:
-        return Colors.orangeAccent;
+        return AppColors.warning;
       case SuggestionType.report:
-        return Colors.redAccent;
+        return AppColors.alert;
       case SuggestionType.insight:
-        return Colors.greenAccent;
+        return AppColors.active;
       case SuggestionType.comparison:
-        return Colors.purpleAccent;
+        return AppColors.chartPurple;
     }
   }
 }
