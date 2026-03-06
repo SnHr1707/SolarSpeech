@@ -18,7 +18,7 @@ class AdaptiveDataTable extends StatelessWidget {
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: DataTable(
-          headingRowColor: MaterialStateProperty.all(AppColors.primaryLight),
+          headingRowColor: WidgetStateProperty.all(AppColors.primaryLight),
           dataRowHeight: 60,
           columns: columns.map((col) => DataColumn(
             label: Text(col, style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textSecondary)),
