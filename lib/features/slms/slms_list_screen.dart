@@ -67,7 +67,7 @@ class SlmsListScreen extends ConsumerWidget {
                           ),
                           onChanged: (v) => ref
                               .read(slmsSearchProvider.notifier)
-                              .state = v,
+                              .set(v),
                         ),
                       ),
                     ],

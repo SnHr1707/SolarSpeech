@@ -127,33 +127,53 @@ class _MfmTab extends ConsumerWidget {
                     .toLowerCase()
                     .contains(search.toLowerCase()))
                 .toList();
-        return _SensorTable(
-          items: filtered,
-          columns: const ['', 'Device Name', 'Category', 'Value', 'Created On'],
-          rowBuilder: (m) => _MfmRow(mfm: m),
+        if (filtered.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(
+                child: Text('No MFM devices found',
+                    style: TextStyle(color: AppColors.textSecondary))),
+          );
+        }
+        return Card(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              headingRowColor:
+                  WidgetStateProperty.all(AppColors.primaryLighter),
+              columns: const [
+                DataColumn(label: Text('')),
+                DataColumn(label: Text('Device Name')),
+                DataColumn(label: Text('Category')),
+                DataColumn(label: Text('Value')),
+                DataColumn(label: Text('Created On')),
+              ],
+              rows: filtered.map((m) {
+                final latestAsync =
+                    ref.watch(latestMfmDataProvider(m['id'] as String));
+                return _buildMfmRow(m, latestAsync);
+              }).toList(),
+            ),
+          ),
         );
       },
     );
   }
-}
 
-class _MfmRow extends ConsumerWidget {
-  final Map<String, dynamic> mfm;
-  const _MfmRow({required this.mfm});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final latestAsync = ref.watch(latestMfmDataProvider(mfm['id'] as String));
+  DataRow _buildMfmRow(Map<String, dynamic> mfm,
+      AsyncValue<Map<String, dynamic>?> latestAsync) {
     return latestAsync.when(
       loading: () => DataRow(cells: [
-        const DataCell(Icon(Icons.circle, color: AppColors.textSecondary, size: 10)),
+        const DataCell(
+            Icon(Icons.circle, color: AppColors.textSecondary, size: 10)),
         DataCell(Text(mfm['name']?.toString() ?? 'MFM')),
         const DataCell(Text('MFM')),
         const DataCell(Text('Loading...')),
         const DataCell(Text('-')),
       ]),
       error: (_, __) => DataRow(cells: [
-        const DataCell(Icon(Icons.circle, color: AppColors.alert, size: 10)),
+        const DataCell(
+            Icon(Icons.circle, color: AppColors.alert, size: 10)),
         DataCell(Text(mfm['name']?.toString() ?? 'MFM')),
         const DataCell(Text('MFM')),
         const DataCell(Text('-')),
@@ -260,30 +280,41 @@ class _TempTab extends ConsumerWidget {
                     .toLowerCase()
                     .contains(search.toLowerCase()))
                 .toList();
-        return _SensorTable(
-          items: filtered,
-          columns: const [
-            '',
-            'Device Name',
-            'Category',
-            'Value',
-            'Created On'
-          ],
-          rowBuilder: (t) => _TempRow(device: t),
+        if (filtered.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(
+                child: Text('No radiation sensor devices found',
+                    style: TextStyle(color: AppColors.textSecondary))),
+          );
+        }
+        return Card(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              headingRowColor:
+                  WidgetStateProperty.all(AppColors.primaryLighter),
+              columns: const [
+                DataColumn(label: Text('')),
+                DataColumn(label: Text('Device Name')),
+                DataColumn(label: Text('Category')),
+                DataColumn(label: Text('Value')),
+                DataColumn(label: Text('Created On')),
+              ],
+              rows: filtered.map((t) {
+                final latestAsync =
+                    ref.watch(latestTempDataProvider(t['id'] as String));
+                return _buildTempRow(t, latestAsync);
+              }).toList(),
+            ),
+          ),
         );
       },
     );
   }
-}
 
-class _TempRow extends ConsumerWidget {
-  final Map<String, dynamic> device;
-  const _TempRow({required this.device});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final latestAsync =
-        ref.watch(latestTempDataProvider(device['id'] as String));
+  DataRow _buildTempRow(Map<String, dynamic> device,
+      AsyncValue<Map<String, dynamic>?> latestAsync) {
     return latestAsync.when(
       loading: () => DataRow(cells: [
         const DataCell(
@@ -294,7 +325,8 @@ class _TempRow extends ConsumerWidget {
         const DataCell(Text('-')),
       ]),
       error: (_, __) => DataRow(cells: [
-        const DataCell(Icon(Icons.circle, color: AppColors.alert, size: 10)),
+        const DataCell(
+            Icon(Icons.circle, color: AppColors.alert, size: 10)),
         DataCell(Text(device['name']?.toString() ?? 'Sensor')),
         const DataCell(Text('Radiation')),
         const DataCell(Text('-')),
@@ -324,39 +356,4 @@ class _TempRow extends ConsumerWidget {
   }
 }
 
-// ── Generic sensor table shell ──
-class _SensorTable extends StatelessWidget {
-  final List<Map<String, dynamic>> items;
-  final List<String> columns;
-  final DataRow Function(Map<String, dynamic>) rowBuilder;
 
-  const _SensorTable({
-    required this.items,
-    required this.columns,
-    required this.rowBuilder,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (items.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.all(32),
-        child: Center(
-            child: Text('No devices found',
-                style: TextStyle(color: AppColors.textSecondary))),
-      );
-    }
-    return Card(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          headingRowColor:
-              WidgetStateProperty.all(AppColors.primaryLighter),
-          columns:
-              columns.map((c) => DataColumn(label: Text(c))).toList(),
-          rows: items.map((item) => rowBuilder(item)).toList(),
-        ),
-      ),
-    );
-  }
-}

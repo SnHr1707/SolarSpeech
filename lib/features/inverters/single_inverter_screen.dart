@@ -45,7 +45,7 @@ class _SingleInverterScreenState extends ConsumerState<SingleInverterScreen> {
       data: (inv) {
         if (inv == null) return const Center(child: Text('Inverter not found'));
         final invName = inv['name'] ?? 'Inverter';
-        final plantName = inv['Plant']?['name'] ?? plantAsync.valueOrNull?['name'] ?? 'Plant';
+        final plantName = inv['Plant']?['name'] ?? plantAsync.value?['name'] ?? 'Plant';
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(24),

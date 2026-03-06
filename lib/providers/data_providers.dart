@@ -3,16 +3,32 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 final supabase = Supabase.instance.client;
 
+// ── Simple Notifier for mutable state (replaces StateProvider in Riverpod 3) ──
+class _DateNotifier extends Notifier<DateTime> {
+  @override
+  DateTime build() => DateTime(2026, 3, 5);
+  void set(DateTime value) => state = value;
+}
+
+class _StringNotifier extends Notifier<String> {
+  @override
+  String build() => '';
+  void set(String value) => state = value;
+}
+
 // ── Date selection ──
-final selectedDateProvider = StateProvider<DateTime>(
-  (ref) => DateTime(2026, 3, 5),
-);
+final selectedDateProvider =
+    NotifierProvider<_DateNotifier, DateTime>(_DateNotifier.new);
 
 // ── Search / filter state ──
-final plantSearchProvider = StateProvider<String>((ref) => '');
-final deviceSearchProvider = StateProvider<String>((ref) => '');
-final slmsSearchProvider = StateProvider<String>((ref) => '');
-final sensorSearchProvider = StateProvider<String>((ref) => '');
+final plantSearchProvider =
+    NotifierProvider<_StringNotifier, String>(_StringNotifier.new);
+final deviceSearchProvider =
+    NotifierProvider<_StringNotifier, String>(_StringNotifier.new);
+final slmsSearchProvider =
+    NotifierProvider<_StringNotifier, String>(_StringNotifier.new);
+final sensorSearchProvider =
+    NotifierProvider<_StringNotifier, String>(_StringNotifier.new);
 
 // ── Plants ──
 final plantsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {

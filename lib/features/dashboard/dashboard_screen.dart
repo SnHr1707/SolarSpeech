@@ -14,7 +14,6 @@ class DashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final statsAsync = ref.watch(dashboardStatsProvider);
     final plantsAsync = ref.watch(plantsProvider);
-    final invCountAsync = ref.watch(inverterCountByPlantProvider);
     final search = ref.watch(plantSearchProvider);
     final selectedDate = ref.watch(selectedDateProvider);
     final width = MediaQuery.of(context).size.width;
@@ -47,7 +46,6 @@ class DashboardScreen extends ConsumerWidget {
               final totalE = (stats['totalEnergy'] as num).toStringAsFixed(1);
               final cap = (stats['totalCapacity'] as num).toStringAsFixed(1);
               final co2 = (stats['co2Reduced'] as num).toStringAsFixed(2);
-              final pCount = stats['plantCount'] as int;
               final kpis = [
                 KpiCard(
                     title: 'Today Energy',
@@ -131,7 +129,7 @@ class DashboardScreen extends ConsumerWidget {
                             lastDate: DateTime(2030),
                           );
                           if (d != null) {
-                            ref.read(selectedDateProvider.notifier).state = d;
+                            ref.read(selectedDateProvider.notifier).set(d);
                           }
                         },
                       ),
@@ -145,7 +143,7 @@ class DashboardScreen extends ConsumerWidget {
                             contentPadding: EdgeInsets.symmetric(vertical: 0),
                           ),
                           onChanged: (v) =>
-                              ref.read(plantSearchProvider.notifier).state = v,
+                              ref.read(plantSearchProvider.notifier).set(v),
                         ),
                       ),
                     ],
@@ -302,7 +300,7 @@ class _DevicesPieChart extends ConsumerWidget {
                                   // Navigate to plant – resolve plant ID
                                   final plants = ref
                                       .read(plantsProvider)
-                                      .valueOrNull;
+                                      .value;
                                   if (plants != null) {
                                     final match = plants.firstWhere(
                                         (p) =>
@@ -502,7 +500,7 @@ class _StatusDotState extends State<_StatusDot>
       return Icon(Icons.circle, color: widget.color, size: 10);
     }
     return AnimatedBuilder(
-      animation: _ctrl,
+      listenable: _ctrl,
       builder: (_, __) => Opacity(
         opacity: 0.4 + 0.6 * _ctrl.value,
         child: Icon(Icons.circle, color: widget.color, size: 10),
