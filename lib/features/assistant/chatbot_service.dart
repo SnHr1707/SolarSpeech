@@ -27,10 +27,12 @@ class ChatbotService {
     try {
       // Detect intent
       if (_isCompareIntent(text)) return await _handleCompare(text);
+      if (_isPercentageIntent(text)) return await _handlePercentage(text);
       if (_isSummaryIntent(text)) return await _handleSummary(text);
       if (_isTopBottomIntent(text)) return await _handleTopBottom(text);
       if (_isStatusIntent(text)) return await _handleStatus(text);
       if (_isCountIntent(text)) return await _handleCount(text);
+      if (_isAverageIntent(text)) return await _handleAverage(text);
       if (_isEnergyIntent(text)) return await _handleEnergy(text);
       if (_isSensorIntent(text)) return await _handleSensorQuery(text);
       if (_isInverterIntent(text)) return await _handleInverterQuery(text);
@@ -93,6 +95,15 @@ class ChatbotService {
   static bool _isHelpIntent(String t) =>
       t.contains('help') || t.contains('what can you') || t.contains('capabilities') ||
       t == 'hi' || t == 'hello' || t == 'hey';
+
+  static bool _isPercentageIntent(String t) =>
+      t.contains('percentage') || t.contains('percent') || t.contains('%') ||
+      t.contains('contribution') || t.contains('share of') ||
+      t.contains('fraction') || t.contains('proportion') ||
+      t.contains('how much of');
+
+  static bool _isAverageIntent(String t) =>
+      t.contains('average') || t.contains('mean ') || t.contains('avg');
 
   // ── Intent Handlers ──
 
@@ -551,6 +562,10 @@ class ChatbotService {
 
 **Compare** — "Compare all plants", "Compare inverters", "Compare MFM sensors"
 
+**Percentage** — "What percentage of Goa plant power is from inverter 1?", "Show contribution of each plant"
+
+**Averages** — "Average temperature", "Average power across inverters"
+
 **Energy** — "Show energy production", "How much power today?", "Energy for inverter 1"
 
 **Status** — "System status", "Which inverters are active?", "Are all devices working?"
@@ -562,6 +577,8 @@ class ChatbotService {
 **Summary** — "Give me an overview", "Dashboard summary"
 
 **Sensors** — "Show MFM readings", "Temperature sensor data"
+
+**Navigate** — "Open inverter 1", "Go to Goa plant", "Show MFM 1 on March 1st", "Inverter 1 first march 2026 total power graph"
 
 Just ask naturally — I'll figure out what you need!''',
       isUser: false,
@@ -598,6 +615,32 @@ Just ask naturally — I'll figure out what you need!''',
     return (value as num).toDouble().toStringAsFixed(1);
   }
 
+  /// Find entity by fuzzy word overlap (e.g. "goa" matches "M/S. GOA SHIPYARD LIMITED")
+  static Map<String, dynamic>? _findEntityByFuzzyName(
+      String text, List<dynamic> items) {
+    for (final item in items) {
+      final name = (item['name'] ?? '').toString().toLowerCase();
+      if (name.isNotEmpty && text.contains(name)) {
+        return Map<String, dynamic>.from(item);
+      }
+    }
+    final textWords =
+        text.split(RegExp(r'\s+')).where((w) => w.length > 2).toSet();
+    Map<String, dynamic>? best;
+    int bestOverlap = 0;
+    for (final item in items) {
+      final name = (item['name'] ?? '').toString().toLowerCase();
+      final nameWords =
+          name.split(RegExp(r'[\s./,_\-]+')).where((w) => w.length > 2).toSet();
+      final overlap = textWords.intersection(nameWords).length;
+      if (overlap > bestOverlap) {
+        bestOverlap = overlap;
+        best = Map<String, dynamic>.from(item);
+      }
+    }
+    return bestOverlap > 0 ? best : null;
+  }
+
   static List<Map<String, dynamic>> _extractMentionedNames(
       String text, List<dynamic> items) {
     final results = <Map<String, dynamic>>[];
@@ -609,15 +652,267 @@ Just ask naturally — I'll figure out what you need!''',
     }
     // Also check for numeric references like "inverter 1", "inverter 2"
     final numMatch = RegExp(r'\b(\d+)\b').allMatches(text);
+    final trailingDigit = RegExp(r'(\d+)\s*$');
     for (final m in numMatch) {
       final num = int.tryParse(m.group(1)!) ?? 0;
-      if (num >= 1 && num <= items.length) {
-        final item = Map<String, dynamic>.from(items[num - 1]);
-        if (!results.any((r) => r['id'] == item['id'])) {
-          results.add(item);
+      if (num < 1) continue;
+      // First: find an item whose name contains this number
+      Map<String, dynamic>? matched;
+      final boundary = RegExp(r'(^|[\D_])' + RegExp.escape(m.group(1)!) + r'($|[\D_])');
+      for (final item in items) {
+        final name = (item['name'] ?? '').toString().toLowerCase();
+        if (boundary.hasMatch(name)) {
+          matched = Map<String, dynamic>.from(item);
+          break;
         }
+      }
+      // Try trailing number in name (e.g. GRP_INNVERTER_1 → 1)
+      matched ??= (() {
+        for (final item in items) {
+          final name = (item['name'] ?? '').toString();
+          final tm = trailingDigit.firstMatch(name);
+          if (tm != null && int.tryParse(tm.group(1)!) == num) {
+            return Map<String, dynamic>.from(item);
+          }
+        }
+        return null;
+      })();
+      // Fallback: use as list index
+      matched ??= (num >= 1 && num <= items.length)
+          ? Map<String, dynamic>.from(items[num - 1])
+          : null;
+      if (matched != null && !results.any((r) => r['id'] == matched!['id'])) {
+        results.add(matched);
       }
     }
     return results;
+  }
+
+  // ── Percentage Handler ──
+
+  static Future<ChatMessage> _handlePercentage(String text) async {
+    final plants = await _supabase.from('Plant').select('id, name');
+    final inverters =
+        await _supabase.from('Inverter').select('id, name, plantId');
+
+    final mentionedPlant = _findEntityByFuzzyName(text, plants);
+    final mentionedInverters = _extractMentionedNames(text, inverters);
+
+    // Detect metric
+    String metricField = 'eTotalPower';
+    String metricLabel = 'Total Energy';
+    if (text.contains('today') || text.contains('daily')) {
+      metricField = 'eTodayPower';
+      metricLabel = 'Today Energy';
+    } else if (text.contains('active') || text.contains('live')) {
+      metricField = 'activePower';
+      metricLabel = 'Active Power';
+    }
+
+    // Case 1: Percentage of a plant's total by specific inverter(s)
+    if (mentionedPlant != null && mentionedInverters.isNotEmpty) {
+      final plantId = mentionedPlant['id'] as String;
+      final plantInvs =
+          inverters.where((i) => i['plantId'] == plantId).toList();
+      double plantTotal = 0;
+      final invValues = <String, double>{};
+      for (final inv in plantInvs) {
+        try {
+          final latest = await _supabase
+              .from('InverterData')
+              .select(metricField)
+              .eq('inverterId', inv['id'] as String)
+              .order('timestamp', ascending: false)
+              .limit(1);
+          if (latest.isNotEmpty) {
+            final val =
+                (latest[0][metricField] as num?)?.toDouble() ?? 0;
+            plantTotal += val;
+            if (mentionedInverters.any((m) => m['id'] == inv['id'])) {
+              invValues[inv['name'] ?? 'Unknown'] = val;
+            }
+          }
+        } catch (_) {}
+      }
+      if (plantTotal > 0 && invValues.isNotEmpty) {
+        final buf = StringBuffer();
+        buf.writeln(
+            '**$metricLabel Contribution to ${mentionedPlant['name']}**\n');
+        double invSum = 0;
+        for (final e in invValues.entries) {
+          final pct = (e.value / plantTotal * 100);
+          invSum += e.value;
+          buf.writeln(
+              '**${e.key}**: ${e.value.toStringAsFixed(1)} kWh \u2014 **${pct.toStringAsFixed(1)}%**');
+        }
+        buf.writeln(
+            '\nPlant Total: ${plantTotal.toStringAsFixed(1)} kWh');
+        if (invValues.length == 1) {
+          final pct =
+              (invSum / plantTotal * 100).toStringAsFixed(1);
+          buf.writeln(
+              '\n**${invValues.keys.first}** contributes **$pct%** of ${mentionedPlant['name']}\'s $metricLabel.');
+        }
+        return ChatMessage(text: buf.toString().trim(), isUser: false);
+      }
+    }
+
+    // Case 2: Percentage of total system by mentioned inverter(s)
+    if (mentionedInverters.isNotEmpty) {
+      double systemTotal = 0;
+      final invValues = <String, double>{};
+      for (final inv in inverters) {
+        try {
+          final latest = await _supabase
+              .from('InverterData')
+              .select(metricField)
+              .eq('inverterId', inv['id'] as String)
+              .order('timestamp', ascending: false)
+              .limit(1);
+          if (latest.isNotEmpty) {
+            final val =
+                (latest[0][metricField] as num?)?.toDouble() ?? 0;
+            systemTotal += val;
+            if (mentionedInverters.any((m) => m['id'] == inv['id'])) {
+              invValues[inv['name'] ?? 'Unknown'] = val;
+            }
+          }
+        } catch (_) {}
+      }
+      if (systemTotal > 0 && invValues.isNotEmpty) {
+        final buf = StringBuffer();
+        buf.writeln('**$metricLabel Contribution (System-wide)**\n');
+        for (final e in invValues.entries) {
+          final pct = (e.value / systemTotal * 100);
+          buf.writeln(
+              '**${e.key}**: ${e.value.toStringAsFixed(1)} kWh \u2014 **${pct.toStringAsFixed(1)}%** of system total');
+        }
+        buf.writeln(
+            '\nSystem Total: ${systemTotal.toStringAsFixed(1)} kWh');
+        return ChatMessage(text: buf.toString().trim(), isUser: false);
+      }
+    }
+
+    // Case 3: Each plant's contribution to total
+    {
+      double systemTotal = 0;
+      final plantEnergy = <String, double>{};
+      for (final plant in plants) {
+        final pid = plant['id'] as String;
+        final plantInvs =
+            inverters.where((i) => i['plantId'] == pid).toList();
+        double pTotal = 0;
+        for (final inv in plantInvs) {
+          try {
+            final latest = await _supabase
+                .from('InverterData')
+                .select(metricField)
+                .eq('inverterId', inv['id'] as String)
+                .order('timestamp', ascending: false)
+                .limit(1);
+            if (latest.isNotEmpty) {
+              pTotal +=
+                  (latest[0][metricField] as num?)?.toDouble() ?? 0;
+            }
+          } catch (_) {}
+        }
+        plantEnergy[plant['name'] ?? 'Unknown'] = pTotal;
+        systemTotal += pTotal;
+      }
+      if (systemTotal > 0) {
+        final buf = StringBuffer();
+        buf.writeln('**Plant $metricLabel Breakdown**\n');
+        for (final e in plantEnergy.entries) {
+          final pct = (e.value / systemTotal * 100);
+          buf.writeln(
+              '**${e.key}**: ${e.value.toStringAsFixed(1)} kWh \u2014 **${pct.toStringAsFixed(1)}%**');
+        }
+        buf.writeln(
+            '\nSystem Total: ${systemTotal.toStringAsFixed(1)} kWh');
+        return ChatMessage(text: buf.toString().trim(), isUser: false);
+      }
+    }
+
+    return ChatMessage(
+      text:
+          'I couldn\'t find enough data to calculate percentages. Try specifying a plant and inverter, e.g. "What percentage of Goa plant power is from inverter 1?"',
+      isUser: false,
+    );
+  }
+
+  // ── Average Handler ──
+
+  static Future<ChatMessage> _handleAverage(String text) async {
+    if (text.contains('temperature') || text.contains('temp')) {
+      final temps =
+          await _supabase.from('TemperatureDevice').select('id, name');
+      double sum = 0;
+      int count = 0;
+      final buf = StringBuffer();
+      buf.writeln('**Average Temperature Readings**\n');
+      for (final t in temps) {
+        try {
+          final latest = await _supabase
+              .from('TemperatureData')
+              .select('value')
+              .eq('deviceId', t['id'] as String)
+              .order('timestamp', ascending: false)
+              .limit(1);
+          if (latest.isNotEmpty) {
+            final val =
+                (latest[0]['value'] as num?)?.toDouble() ?? 0;
+            sum += val;
+            count++;
+            buf.writeln('**${t['name']}**: ${val.toStringAsFixed(1)} \u00b0C');
+          }
+        } catch (_) {}
+      }
+      if (count > 0) {
+        buf.writeln(
+            '\n**Average: ${(sum / count).toStringAsFixed(1)} \u00b0C** across $count sensors');
+      }
+      return ChatMessage(text: buf.toString().trim(), isUser: false);
+    }
+
+    // Default: average power across inverters
+    final inverters =
+        await _supabase.from('Inverter').select('id, name');
+    String metricField = 'activePower';
+    String metricLabel = 'Active Power';
+    if (text.contains('total') || text.contains('e-total')) {
+      metricField = 'eTotalPower';
+      metricLabel = 'Total Energy';
+    } else if (text.contains('today') || text.contains('daily')) {
+      metricField = 'eTodayPower';
+      metricLabel = 'Today Energy';
+    }
+
+    double sum = 0;
+    int count = 0;
+    for (final inv in inverters) {
+      try {
+        final latest = await _supabase
+            .from('InverterData')
+            .select(metricField)
+            .eq('inverterId', inv['id'] as String)
+            .order('timestamp', ascending: false)
+            .limit(1);
+        if (latest.isNotEmpty) {
+          sum += (latest[0][metricField] as num?)?.toDouble() ?? 0;
+          count++;
+        }
+      } catch (_) {}
+    }
+
+    if (count > 0) {
+      return ChatMessage(
+        text:
+            '**Average $metricLabel** across $count inverters: **${(sum / count).toStringAsFixed(1)} kWh**\n\nTotal: ${sum.toStringAsFixed(1)} kWh',
+        isUser: false,
+      );
+    }
+    return ChatMessage(
+        text: 'No inverter data available to calculate average.',
+        isUser: false);
   }
 }

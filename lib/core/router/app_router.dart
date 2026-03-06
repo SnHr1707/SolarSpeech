@@ -56,6 +56,7 @@ final goRouter = GoRouter(
             mfmId: state.pathParameters['mfmId']!,
             plantId: state.pathParameters['plantId']!,
             initialDate: state.uri.queryParameters['date'],
+            initialChart: state.uri.queryParameters['chart'],
           ),
         ),
         GoRoute(

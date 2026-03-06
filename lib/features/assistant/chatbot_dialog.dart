@@ -110,13 +110,25 @@ class _ChatbotDialogState extends State<ChatbotDialog>
     });
     _scrollToBottom();
 
-    // Check if it's a navigation command first
+    // Resolve navigation route
     final route = await LlmNavigationService.getRouteFromText(text);
-    if (route != null && _isNavigationCommand(text)) {
+    final isDataQ = _isDataQuestion(text);
+
+    if (isDataQ) {
+      // Answer with data from chatbot
+      final response = await ChatbotService.processMessage(text);
+      if (!mounted) return;
+      setState(() {
+        _messages.add(response);
+        _isProcessing = false;
+      });
+      _scrollToBottom();
+    } else if (route != null && _isNavigationCommand(text)) {
+      // Navigate
       if (!mounted) return;
       setState(() {
         _messages.add(ChatMessage(
-          text: "Navigating to **$route** for you!",
+          text: "Navigating for you!",
           isUser: false,
         ));
         _isProcessing = false;
@@ -128,24 +140,63 @@ class _ChatbotDialogState extends State<ChatbotDialog>
       Navigator.of(context).pop();
       router.go(route);
       return;
+    } else {
+      // Fallback chatbot response
+      final response = await ChatbotService.processMessage(text);
+      if (!mounted) return;
+      setState(() {
+        _messages.add(response);
+        _isProcessing = false;
+      });
+      _scrollToBottom();
     }
+  }
 
-    // Otherwise, answer as chatbot
-    final response = await ChatbotService.processMessage(text);
-    if (!mounted) return;
-    setState(() {
-      _messages.add(response);
-      _isProcessing = false;
-    });
-    _scrollToBottom();
+  bool _isDataQuestion(String text) {
+    final t = text.toLowerCase();
+    return t.contains('?') || t.contains('what ') || t.contains('how much') ||
+        t.contains('how many') || t.contains('percentage') ||
+        t.contains('percent') || t.contains('compare') ||
+        t.contains('tell me') || t.contains('which ') ||
+        t.contains('average') || t.contains('ratio') ||
+        t.contains('highest') || t.contains('lowest') ||
+        t.contains('best') || t.contains('worst') ||
+        t.contains('top ') || t.contains('bottom ') ||
+        t.contains('how is') || t.contains('count') ||
+        t.contains('summary') || t.contains('status') ||
+        t.contains('help') || t.contains('contribution');
   }
 
   bool _isNavigationCommand(String text) {
     final t = text.toLowerCase();
-    return t.contains('go to') || t.contains('navigate') ||
-        t.contains('open') || t.contains('show me') ||
-        t.contains('take me') || t.contains('switch to') ||
-        t.contains('go ') || t.contains('visit');
+    // Explicit navigation words
+    if (t.contains('go to') || t.contains('navigate') || t.contains('open') ||
+        t.contains('show me') || t.contains('take me') ||
+        t.contains('switch to') || t.contains('visit')) {
+      return true;
+    }
+    // Device + chart/graph intent
+    if ((t.contains('graph') || t.contains('chart')) &&
+        RegExp(r'\b(inverter|plant|mfm|temp|sensor|slms)\b',
+                caseSensitive: false)
+            .hasMatch(t)) {
+      return true;
+    }
+    // Bare tab name
+    if (RegExp(r'^\s*(dashboard|alerts?|my\s*plants?|exports?)\s*$',
+            caseSensitive: false)
+        .hasMatch(t)) {
+      return true;
+    }
+    // Device + number without data-question context
+    if (!_isDataQuestion(text) &&
+        RegExp(r'\b(inverter|mfm|temp|slms)\s+\w',
+                caseSensitive: false)
+            .hasMatch(t) &&
+        RegExp(r'\d').hasMatch(t)) {
+      return true;
+    }
+    return false;
   }
 
   void _scrollToBottom() {
@@ -280,6 +331,8 @@ class _ChatbotDialogState extends State<ChatbotDialog>
           _quickChip('Energy today'),
           _quickChip('System status'),
           _quickChip('Top inverters'),
+          _quickChip('Percentage breakdown'),
+          _quickChip('Average power'),
           _quickChip('Sensor readings'),
           _quickChip('Help'),
         ],

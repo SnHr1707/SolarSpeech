@@ -86,7 +86,7 @@ class LlmNavigationService {
     caseSensitive: false);
 
   static final RegExp _dateDayMonth = RegExp(
-    r'\b(\d{1,2})(?:st|nd|rd|th)?\s+(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)(?:\s+(\d{4}))?\b',
+    r'\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)(?:\s+(\d{4}))?\b',
     caseSensitive: false);
 
   static final RegExp _dateRelative = RegExp(
@@ -128,9 +128,41 @@ class LlmNavigationService {
     'sunday': DateTime.sunday,
   };
 
+  /// Convert ordinal words adjacent to month names into numeric form
+  /// so date-detection regexes can match them.
+  /// e.g. "first march" → "1 march", "march twenty first" → "march 21"
+  static String _normalizeOrdinalWords(String text) {
+    final monthPat = _monthNames.keys.join('|');
+    // Sort by key length descending so "twenty first" is checked before "first"
+    final sorted = _ordinalWords.entries.toList()
+      ..sort((a, b) => b.key.length.compareTo(a.key.length));
+
+    for (final entry in sorted) {
+      // "first march" / "first of march" → "1 march" / "1 of march"
+      final beforeMonth = RegExp(
+        '\\b${RegExp.escape(entry.key)}\\b(\\s+(?:of\\s+)?)($monthPat)',
+        caseSensitive: false,
+      );
+      text = text.replaceAllMapped(
+          beforeMonth, (m) => '${entry.value}${m.group(1)}${m.group(2)}');
+
+      // "march first" → "march 1"
+      final afterMonth = RegExp(
+        '($monthPat)(\\s+)${RegExp.escape(entry.key)}\\b',
+        caseSensitive: false,
+      );
+      text = text.replaceAllMapped(
+          afterMonth, (m) => '${m.group(1)}${m.group(2)}${entry.value}');
+    }
+    return text;
+  }
+
   /// Detect a date from user text. Returns the date and the matched text span.
   static ({DateTime? date, String cleanedText}) _detectDate(String text) {
     final now = DateTime(2026, 3, 6);
+
+    // Pre-process: convert ordinal words near month names to digits
+    text = _normalizeOrdinalWords(text);
 
     // 1. Relative dates
     final relMatch = _dateRelative.firstMatch(text);
@@ -299,6 +331,7 @@ class LlmNavigationService {
   }
 
   // ── Chart / graph filter keywords ──
+  // Inverter charts
   static final List<_ChartIntent> _chartIntents = [
     _ChartIntent('Total PV Current', [
       'pv current', 'dc current', 'total current', 'current graph',
@@ -322,7 +355,20 @@ class LlmNavigationService {
     ]),
   ];
 
-  /// Detect if the user mentioned a specific chart type.
+  // MFM charts (Voltage / Current / Total Power)
+  static final List<_ChartIntent> _mfmChartIntents = [
+    _ChartIntent('Voltage', [
+      'voltage', 'voltage graph', 'voltage chart', 'l1 voltage', 'l2 voltage', 'l3 voltage',
+    ]),
+    _ChartIntent('Current', [
+      'current', 'current graph', 'current chart', 'l1 current', 'l2 current', 'l3 current',
+    ]),
+    _ChartIntent('Total Power', [
+      'total power', 'power', 'power graph', 'power chart',
+    ]),
+  ];
+
+  /// Detect if the user mentioned a specific chart type (inverter charts).
   static String? _detectChart(String text) {
     for (final ci in _chartIntents) {
       for (final kw in ci.keywords) {
@@ -335,6 +381,16 @@ class LlmNavigationService {
     }
     if (RegExp(r'\b(current)\b', caseSensitive: false).hasMatch(text)) {
       return 'Total PV Current';
+    }
+    return null;
+  }
+
+  /// Detect MFM-specific chart type.
+  static String? _detectMfmChart(String text) {
+    for (final ci in _mfmChartIntents) {
+      for (final kw in ci.keywords) {
+        if (text.contains(kw)) return ci.chartName;
+      }
     }
     return null;
   }
@@ -362,12 +418,15 @@ class LlmNavigationService {
     final detectedDate = dateResult.date;
     final text = dateResult.cleanedText;
 
-    // Detect chart filter (used for inverter routes)
+    // Detect chart filters
     final chart = _detectChart(text);
+    final mfmChart = _detectMfmChart(text);
 
     // Helper to append both chart and date to a route
     String finalize(String route) {
-      var r = _appendChart(route, chart);
+      // Use MFM chart for MFM routes, inverter chart otherwise
+      final useChart = route.contains('/mfm/') ? mfmChart : chart;
+      var r = _appendChart(route, useChart);
       r = _appendDate(r, detectedDate);
       return r;
     }
@@ -446,8 +505,7 @@ class LlmNavigationService {
               tab.route == '/my-plants' ||
               tab.route == '/dashboard' ||
               tab.route == '/alerts' ||
-              tab.route == '/exports' ||
-              tab.route.startsWith('/sensors')) {
+              tab.route == '/exports') {
             // Prefer more specific matches (longer keyword = more specific)
             final score = keyword.length + (core == keyword ? 100 : 0);
             if (score > bestScore) {
@@ -470,18 +528,29 @@ class LlmNavigationService {
     if (digitMatch != null) return digitMatch.group(1);
 
     // Try word numbers — scan every word
+    // Only pick word-numbers that appear AFTER a device keyword to avoid homophones
     final words = text.split(RegExp(r'\s+'));
-    for (final w in words) {
-      if (_wordToNumber.containsKey(w)) {
-        // Make sure it's not a filler homophone in context
-        // "go to inverter two" — "to" is filler, "two" is number
-        // We pick the LAST matching number-word as the identifier
+    final deviceKwPattern = RegExp(
+      r'\b(inverter|inv|converter|invertor|plant|site|station|farm|slms|slm|string|mfm|meter|temp|temperature|thermal|sensor)\b',
+      caseSensitive: false,
+    );
+    // Homophones that are only valid as numbers AFTER a device keyword
+    const homophones = {'to', 'too', 'for', 'ate', 'won'};
+
+    int deviceKwIndex = -1;
+    for (int i = 0; i < words.length; i++) {
+      if (deviceKwPattern.hasMatch(words[i])) {
+        deviceKwIndex = i;
       }
     }
-    // Pick the last number-word that appears after a device keyword
+
+    // Pick the last number-word that appears after the last device keyword
     for (int i = words.length - 1; i >= 0; i--) {
       if (_wordToNumber.containsKey(words[i])) {
-        // Avoid picking filler homophones if they appear BEFORE a device keyword
+        // Skip homophones unless they appear right after a device keyword
+        if (homophones.contains(words[i]) && (deviceKwIndex < 0 || i <= deviceKwIndex)) {
+          continue;
+        }
         final num = _wordToNumber[words[i]]!;
         return num.toString();
       }
@@ -554,46 +623,62 @@ class LlmNavigationService {
 
   static Future<String?> _resolveMfm(String? id, String text) async {
     try {
-      final mfms = await _supabase
-          .from('MFM')
-          .select('id, name, Sensors(plantId)');
+      final mfms = await _supabase.from('MFM').select('id, name, sensorsId');
       final match = _findBestMatch(mfms, id, text);
       if (match != null) {
-        final plantId = match['Sensors']?['plantId']?.toString() ?? '';
-        if (plantId.isNotEmpty) {
-          return '/plants/$plantId/mfm/${match['id']}';
+        final sensorsId = match['sensorsId']?.toString() ?? '';
+        if (sensorsId.isNotEmpty) {
+          final sensors = await _supabase
+              .from('Sensors')
+              .select('plantId')
+              .eq('id', sensorsId)
+              .limit(1);
+          if (sensors.isNotEmpty) {
+            final plantId = sensors[0]['plantId']?.toString() ?? '';
+            if (plantId.isNotEmpty) {
+              return '/plants/$plantId/mfm/${match['id']}';
+            }
+          }
         }
       }
-      return '/sensors';
+      return '/sensors?tab=mfm';
     } catch (_) {
-      return '/sensors';
+      return '/sensors?tab=mfm';
     }
   }
 
   static Future<String?> _resolveTemp(String? id, String text) async {
     try {
-      final temps = await _supabase
-          .from('TemperatureDevice')
-          .select('id, name, Sensors(plantId)');
+      final temps = await _supabase.from('TemperatureDevice').select('id, name, sensorsId');
       final match = _findBestMatch(temps, id, text);
       if (match != null) {
-        final plantId = match['Sensors']?['plantId']?.toString() ?? '';
-        if (plantId.isNotEmpty) {
-          return '/plants/$plantId/temp/${match['id']}';
+        final sensorsId = match['sensorsId']?.toString() ?? '';
+        if (sensorsId.isNotEmpty) {
+          final sensors = await _supabase
+              .from('Sensors')
+              .select('plantId')
+              .eq('id', sensorsId)
+              .limit(1);
+          if (sensors.isNotEmpty) {
+            final plantId = sensors[0]['plantId']?.toString() ?? '';
+            if (plantId.isNotEmpty) {
+              return '/plants/$plantId/temp/${match['id']}';
+            }
+          }
         }
       }
-      return '/sensors';
+      return '/sensors?tab=temperature';
     } catch (_) {
-      return '/sensors';
+      return '/sensors?tab=temperature';
     }
   }
 
   static Future<String?> _resolveSensor(String? id, String text) async {
     // Try MFM first, then temperature
     final mfmRoute = await _resolveMfm(id, text);
-    if (mfmRoute != null && mfmRoute != '/sensors') return mfmRoute;
+    if (mfmRoute != null && !mfmRoute.startsWith('/sensors')) return mfmRoute;
     final tempRoute = await _resolveTemp(id, text);
-    if (tempRoute != null && tempRoute != '/sensors') return tempRoute;
+    if (tempRoute != null && !tempRoute.startsWith('/sensors')) return tempRoute;
     return '/sensors';
   }
 
@@ -634,25 +719,39 @@ class LlmNavigationService {
       }
 
       // Search MFMs
-      final mfms = await _supabase.from('MFM').select('id, name, Sensors(plantId)');
+      final mfms = await _supabase.from('MFM').select('id, name, sensorsId');
       for (final m in mfms) {
         final name = (m['name'] ?? '').toString().toLowerCase();
         if (_fuzzyScore(core, name) >= 0.5 || name.contains(core) || core.contains(name)) {
-          final plantId = m['Sensors']?['plantId']?.toString() ?? '';
-          if (plantId.isNotEmpty) {
-            return '/plants/$plantId/mfm/${m['id']}';
+          final sensorsId = m['sensorsId']?.toString() ?? '';
+          if (sensorsId.isNotEmpty) {
+            final sensors = await _supabase
+                .from('Sensors').select('plantId').eq('id', sensorsId).limit(1);
+            if (sensors.isNotEmpty) {
+              final plantId = sensors[0]['plantId']?.toString() ?? '';
+              if (plantId.isNotEmpty) {
+                return '/plants/$plantId/mfm/${m['id']}';
+              }
+            }
           }
         }
       }
 
       // Search temp devices
-      final temps = await _supabase.from('TemperatureDevice').select('id, name, Sensors(plantId)');
+      final temps = await _supabase.from('TemperatureDevice').select('id, name, sensorsId');
       for (final t in temps) {
         final name = (t['name'] ?? '').toString().toLowerCase();
         if (_fuzzyScore(core, name) >= 0.5 || name.contains(core) || core.contains(name)) {
-          final plantId = t['Sensors']?['plantId']?.toString() ?? '';
-          if (plantId.isNotEmpty) {
-            return '/plants/$plantId/temp/${t['id']}';
+          final sensorsId = t['sensorsId']?.toString() ?? '';
+          if (sensorsId.isNotEmpty) {
+            final sensors = await _supabase
+                .from('Sensors').select('plantId').eq('id', sensorsId).limit(1);
+            if (sensors.isNotEmpty) {
+              final plantId = sensors[0]['plantId']?.toString() ?? '';
+              if (plantId.isNotEmpty) {
+                return '/plants/$plantId/temp/${t['id']}';
+              }
+            }
           }
         }
       }
@@ -683,7 +782,7 @@ class LlmNavigationService {
 
       // Try name containing the identifier as a whole word/number
       final idLower = identifier.toLowerCase();
-      final idBoundary = RegExp(r'(^|\D)' + RegExp.escape(idLower) + r'($|\D)');
+      final idBoundary = RegExp(r'(^|[\D_])' + RegExp.escape(idLower) + r'($|[\D_])');
       for (final row in rows) {
         final name = (row['name'] ?? '').toString().toLowerCase();
         if (idBoundary.hasMatch(name)) {
@@ -691,7 +790,19 @@ class LlmNavigationService {
         }
       }
 
-      // Try by 1-based index
+      // Try matching the number at the end of a name (e.g. "GRP_INNVERTER_1" → 1)
+      if (num != null) {
+        final trailingDigit = RegExp(r'(\d+)\s*$');
+        for (final row in rows) {
+          final name = (row['name'] ?? '').toString();
+          final m = trailingDigit.firstMatch(name);
+          if (m != null && int.tryParse(m.group(1)!) == num) {
+            return Map<String, dynamic>.from(row);
+          }
+        }
+      }
+
+      // Last resort: try by 1-based index
       if (num != null && num >= 1 && num <= rows.length) {
         return Map<String, dynamic>.from(rows[num - 1]);
       }
