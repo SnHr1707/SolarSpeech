@@ -1,3 +1,5 @@
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 class AppConfig {
   static const bool useSyntheticData = false;
 
@@ -8,10 +10,10 @@ class AppConfig {
   static const bool useLlmAssisted = true;
 
   // ── OpenRouter LLM Configuration ──
-  // API key from https://openrouter.ai/settings/keys
-  static const String openRouterApiKey =
-      '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';
+  // API key loaded from .env file
+  static String get openRouterApiKey =>
+      dotenv.env['OPENROUTER_API_KEY'] ?? '';
 
   // Model to use — fast model for responsive chatbot
-  static const String llmModel = 'google/gemini-2.0-flash-001';
+  static const String llmModel = 'google/gemma-3-12b-it:free';
 }
