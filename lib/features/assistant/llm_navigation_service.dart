@@ -422,8 +422,16 @@ class LlmNavigationService {
   }
 
   /// Main entry point — returns a route string or null.
+  /// Uses rule-based route resolution for reliable, fast navigation.
   static Future<String?> getRouteFromText(String userInput) async {
     if (userInput.trim().isEmpty) return null;
+
+    // Rule-based route resolution — fast and reliable
+    return _getRouteRuleBased(userInput);
+  }
+
+  /// The original rule-based route resolution (kept as fallback).
+  static Future<String?> _getRouteRuleBased(String userInput) async {
     final rawText = userInput.toLowerCase().trim();
 
     // Extract date first (before identifier extraction gets confused)

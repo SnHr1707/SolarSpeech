@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../../core/theme/app_colors.dart';
 import 'llm_navigation_service.dart';
+import 'openrouter_service.dart';
 
 class AiAssistantDialog extends StatefulWidget {
   const AiAssistantDialog({super.key});
@@ -35,6 +36,8 @@ class _AiAssistantDialogState extends State<AiAssistantDialog>
     _pulseAnim = Tween<double>(begin: 1.0, end: 1.18).animate(
       CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
     );
+    // Fresh LLM voice session
+    OpenRouterService.voice.clearHistory();
   }
 
   Future<void> _initSpeech() async {
@@ -117,21 +120,23 @@ class _AiAssistantDialogState extends State<AiAssistantDialog>
     if (text.trim().isEmpty) return;
     setState(() {
       _isProcessing = true;
-      _statusMessage = 'Finding "$text"…';      _textController.clear();    });
+      _statusMessage = 'Finding "$text"…';
+      _textController.clear();
+    });
 
+    // LlmNavigationService now tries LLM first, then rule-based
     final route = await LlmNavigationService.getRouteFromText(text);
 
     if (!mounted) return;
 
     if (route != null) {
-      // Capture the router before popping
       final router = GoRouter.of(context);
-      Navigator.of(context).pop(); // Close dialog
+      Navigator.of(context).pop();
       router.go(route);
     } else {
       setState(() {
         _isProcessing = false;
-        _statusMessage = 'Couldn\'t find that — try again';
+        _statusMessage = 'Couldn\'t find that — try again or use the chatbot for data questions';
       });
     }
   }

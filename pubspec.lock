@@ -281,6 +281,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.1.6"
+  dartx:
+    dependency: transitive
+    description:
+      name: dartx
+      sha256: "8b25435617027257d43e6508b5fe061012880ddfdaa75a71d607c3de2a13d244"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.2.0"
   diffutil_dart:
     dependency: transitive
     description:
@@ -712,6 +720,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "9.3.0"
+  openrouter_api:
+    dependency: "direct main"
+    description:
+      name: openrouter_api
+      sha256: "8637d946054f59af40f96a56360de2b78d4a717224d49ef3df52e359cf117324"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.2"
   package_config:
     dependency: transitive
     description:
@@ -1173,6 +1189,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.6.16"
+  time:
+    dependency: transitive
+    description:
+      name: time
+      sha256: "46187cf30bffdab28c56be9a63861b36e4ab7347bf403297595d6a97e10c789f"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.1.6"
   typed_data:
     dependency: transitive
     description:

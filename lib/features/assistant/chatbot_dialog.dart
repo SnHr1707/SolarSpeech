@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../../core/theme/app_colors.dart';
 import 'chatbot_service.dart';
-import 'llm_navigation_service.dart';
+import 'openrouter_service.dart';
 
 class ChatbotDialog extends StatefulWidget {
   const ChatbotDialog({super.key});
@@ -37,9 +36,11 @@ class _ChatbotDialogState extends State<ChatbotDialog>
     _pulseAnim = Tween<double>(begin: 1.0, end: 1.15).animate(
       CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
     );
+    // Start a fresh LLM conversation for this chat session
+    OpenRouterService.chat.clearHistory();
     // Welcome message
     _messages.add(ChatMessage(
-      text: "Hi! I'm your Solar Dashboard Assistant. Ask me anything about your plants, inverters, sensors, energy data — or say **help** to see all I can do!",
+      text: "Hi! I'm your Solar Dashboard Assistant powered by AI. Ask me anything about your plants, inverters, sensors, energy data — I remember our conversation context!",
       isUser: false,
     ));
   }
@@ -116,142 +117,24 @@ class _ChatbotDialogState extends State<ChatbotDialog>
     });
     _scrollToBottom();
 
-    // Resolve navigation route
-    final route = await LlmNavigationService.getRouteFromText(text);
-    final isDataQ = _isDataQuestion(text);
+    // ALL messages go through the LLM-powered ChatbotService.
+    // The chatbot only displays formatted text — no navigation.
+    final response = await ChatbotService.processMessage(text);
+    if (!mounted) return;
 
-    // Plant-filtered list navigation takes priority
-    final isPlantFilteredNav = route != null &&
-        route.contains('plant=') &&
-        (route.startsWith('/sensors') || route.startsWith('/inverters'));
+    // Strip any stale [NAVIGATE:...] tags the LLM might still emit
+    final cleanText = response.text
+        .replaceAll(RegExp(r'\[NAVIGATE:[^\]]*\]'), '')
+        .trim();
 
-    if (isPlantFilteredNav || (route != null && _isNavigationCommand(text) && !isDataQ)) {
-      // Navigate
-      if (!mounted) return;
-      setState(() {
-        _messages.add(ChatMessage(
-          text: "Navigating for you!",
-          isUser: false,
-        ));
-        _isProcessing = false;
-      });
-      _scrollToBottom();
-      await Future.delayed(const Duration(milliseconds: 600));
-      if (!mounted) return;
-      final router = GoRouter.of(context);
-      Navigator.of(context).pop();
-      router.go(route);
-      return;
-    } else if (isDataQ) {
-      // Answer with data from chatbot
-      final response = await ChatbotService.processMessage(text);
-      if (!mounted) return;
-      setState(() {
-        _messages.add(response);
-        _isProcessing = false;
-      });
-      _scrollToBottom();
-    } else if (route != null && _isNavigationCommand(text)) {
-      // Navigate
-      if (!mounted) return;
-      setState(() {
-        _messages.add(ChatMessage(
-          text: "Navigating for you!",
-          isUser: false,
-        ));
-        _isProcessing = false;
-      });
-      _scrollToBottom();
-      await Future.delayed(const Duration(milliseconds: 600));
-      if (!mounted) return;
-      final router = GoRouter.of(context);
-      Navigator.of(context).pop();
-      router.go(route);
-      return;
-    } else {
-      // Fallback chatbot response
-      final response = await ChatbotService.processMessage(text);
-      if (!mounted) return;
-      setState(() {
-        _messages.add(response);
-        _isProcessing = false;
-      });
-      _scrollToBottom();
-    }
-  }
-
-  bool _isDataQuestion(String text) {
-    final t = text.toLowerCase();
-    return t.contains('?') || t.contains('what ') || t.contains('how much') ||
-        t.contains('how many') || t.contains('percentage') ||
-        t.contains('percent') || t.contains('compare') ||
-        t.contains('tell me') || t.contains('which ') ||
-        t.contains('average') || t.contains('ratio') ||
-        t.contains('highest') || t.contains('lowest') ||
-        t.contains('best') || t.contains('worst') ||
-        t.contains('top ') || t.contains('bottom ') ||
-        t.contains('how is') || t.contains('count') ||
-        t.contains('summary') || t.contains('status') ||
-        t.contains('help') || t.contains('contribution') ||
-        t.contains('trend') || t.contains('historical') ||
-        t.contains('last ') || t.contains('past ') ||
-        t.contains('yesterday') || t.contains('this week') ||
-        t.contains('this month') || t.contains('last week') ||
-        t.contains('last month') || t.contains('improving') ||
-        t.contains('declining') || t.contains('energy') ||
-        t.contains('power') || t.contains('generation') ||
-        t.contains('sensor') || t.contains('temperature') ||
-        t.contains('versus') || t.contains(' vs ') ||
-        (t.contains('alert') && (t.contains('inverter') || t.contains('mfm') ||
-            t.contains('temp') || t.contains('sensor') || t.contains('plant') ||
-            t.contains('device')));
-  }
-
-  bool _isNavigationCommand(String text) {
-    final t = text.toLowerCase();
-    // Explicit navigation words
-    if (t.contains('go to') || t.contains('navigate') || t.contains('open') ||
-        t.contains('show me') || t.contains('take me') ||
-        t.contains('switch to') || t.contains('visit')) {
-      return true;
-    }
-    // "show" + list keyword (sensors/inverters) + plant reference
-    if (t.contains('show') &&
-        RegExp(r'\b(sensor|sensors|inverter|inverters|mfm|temperature|temp|wms)\b',
-                caseSensitive: false)
-            .hasMatch(t) &&
-        RegExp(r'\b(plant|site|station|farm)\b', caseSensitive: false)
-            .hasMatch(t)) {
-      return true;
-    }
-    // Device + chart/graph intent
-    if ((t.contains('graph') || t.contains('chart')) &&
-        RegExp(r'\b(inverter|plant|mfm|temp|sensor|slms)\b',
-                caseSensitive: false)
-            .hasMatch(t)) {
-      return true;
-    }
-    // Bare tab name
-    if (RegExp(r'^\s*(dashboard|alerts?|my\s*plants?|exports?)\s*$',
-            caseSensitive: false)
-        .hasMatch(t)) {
-      return true;
-    }
-    // Alert + show/open + device
-    if ((t.contains('show') || t.contains('open') || t.contains('go')) &&
-        RegExp(r'\b(alert|alarm|warning|fault)\b', caseSensitive: false).hasMatch(t) &&
-        RegExp(r'\b(inverter|mfm|temp|sensor|plant|site)\b', caseSensitive: false).hasMatch(t)) {
-      return true;
-    }
-    // Device + number without data-question context
-    if (!_isDataQuestion(text) &&
-        RegExp(r'\b(inverter|mfm|temp|slms)\s+\w',
-                caseSensitive: false)
-            .hasMatch(t) &&
-        RegExp(r'\d').hasMatch(t)) {
-      return true;
-    }
-    return false;
+    setState(() {
+      _messages.add(ChatMessage(
+        text: cleanText.isNotEmpty ? cleanText : response.text,
+        isUser: false,
+      ));
+      _isProcessing = false;
+    });
+    _scrollToBottom();
   }
 
   void _scrollToBottom() {

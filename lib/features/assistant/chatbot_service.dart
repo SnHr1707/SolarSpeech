@@ -1,4 +1,8 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../core/config/app_config.dart';
+import 'openrouter_service.dart';
+import 'database_context_service.dart';
 
 class ChatMessage {
   final String text;
@@ -13,6 +17,42 @@ class ChatMessage {
     this.data,
   }) : timestamp = timestamp ?? DateTime.now();
 }
+
+/// System prompt for the chat-mode LLM -- restricted to solar domain.
+const _solarSystemPrompt = '''
+You are SolarSpeech AI, an intelligent assistant exclusively for solar power plant monitoring and management.
+
+STRICT SCOPE RULES:
+- You ONLY answer questions related to solar power plants, renewable energy systems, inverters, sensors, energy production, plant monitoring, alerts, and related technical topics.
+- You MAY answer basic educational questions about solar energy (e.g., "how does a solar plant work?", "what is an inverter?", "what is MPPT?").
+- You MUST politely decline ANY questions not related to solar energy or power plant systems. For irrelevant questions (e.g., "what is a tree?", "write a poem", "tell me a joke"), respond ONLY with: "I'm SolarSpeech AI and I can only help with solar power plant related queries. Please ask me about your plants, inverters, sensors, energy data, or solar technology!"
+
+Current date: 2026-03-07.
+
+Database schema:
+- Plant (id, name, capacityKWp, totalEnergy, todayEnergy, co2Reduced)
+- Inverter (id, name, plantId) -> InverterData (inverterId, timestamp, activePower kW, eTodayPower kWh, eTotalPower kWh, totalPVVoltage V, totalPVCurrent A)
+- Sensors (id, plantId) -> MFM (id, name, sensorsId) -> MFMData (mfmId, timestamp, l1Voltage, l2Voltage, l3Voltage, l1Current, l2Current, l3Current, totalPower kW)
+- TemperatureDevice (id, name, sensorsId) -> TemperatureData (deviceId, timestamp, ambientTemp C, moduleTemp C)
+- WFM (id, name, sensorsId) -- weather monitoring
+- Alert (id, deviceId, plantId, severity, message, triggeredAt)
+- SLMS -- string-level monitoring, indexed by inverterId
+
+Response guidelines:
+- Use the [RESOLVED ENTITIES] section to know EXACTLY which devices the user is referring to. The rule-based system has already resolved references like "inverter 1" or "sensor 3" to actual device names and IDs -- trust these resolutions.
+- Use the [DATABASE CONTEXT] section for actual data values to answer the query.
+- Format numbers with units (kW, kWh, C, V, A).
+- Use markdown **bold** for emphasis and bullet points for lists.
+- NEVER use markdown tables (no | --- | table syntax). Instead, present comparisons and multi-device data as bullet-point lists or line-by-line text. For example, list each device on its own line with its values.
+- Be conversational but precise; keep answers concise and well-structured.
+- NEVER include navigation commands or route paths in your response.
+- Do NOT output [NAVIGATE:...] or any route URLs. Just answer the question with data.
+- Present data in a clean, readable format using bullet points, numbered lists, or short paragraphs -- never tables.
+- If you cannot answer from the provided data, say so honestly.
+- For follow-up questions, use the conversation history to resolve references
+  (e.g. "show voltage" after discussing inverter 1 & 3 -> show voltage for those inverters).
+- Keep responses concise -- avoid unnecessary preamble.
+''';
 
 class ChatbotService {
   static final _supabase = Supabase.instance.client;
@@ -36,14 +76,43 @@ class ChatbotService {
   };
 
   /// Process a user message and return a bot response.
+  /// When [AppConfig.useLlmAssisted] is true: rule-based resolves entities &
+  /// fetches data, then LLM formats the response. Falls back to rule-based on
+  /// LLM API error.
+  /// When false: sole rule-based mode (no LLM calls).
   static Future<ChatMessage> processMessage(String userInput) async {
     final text = userInput.toLowerCase().trim();
     if (text.isEmpty) {
       return ChatMessage(text: 'Please ask me something!', isUser: false);
     }
 
+    if (AppConfig.useLlmAssisted) {
+      // -- Hybrid mode: rule-based resolves context, LLM formats response --
+      try {
+        final enrichedContext = await _buildEnrichedContext(userInput);
+        final llmResponse = await OpenRouterService.chat.sendMessage(
+          userMessage: userInput,
+          systemPrompt: _solarSystemPrompt,
+          additionalContext: enrichedContext,
+          rememberConversation: true,
+        );
+
+        if (llmResponse.isNotEmpty) {
+          return ChatMessage(text: llmResponse, isUser: false);
+        }
+      } catch (e) {
+        debugPrint(
+            '[SolarSpeech LLM] Chat error: $e -- falling back to rule-based');
+      }
+    }
+
+    // -- Sole rule-based mode (or fallback on LLM error) --
+    return await _processRuleBased(text);
+  }
+
+  /// Run the full rule-based intent -> handler chain.
+  static Future<ChatMessage> _processRuleBased(String text) async {
     try {
-      // Detect intent — order matters (more specific first)
       if (_isAlertIntent(text)) return await _handleAlertQuery(text);
       if (_isTrendIntent(text)) return await _handleTrend(text);
       if (_isHistoricalIntent(text)) return await _handleHistorical(text);
@@ -59,8 +128,6 @@ class ChatbotService {
       if (_isInverterIntent(text)) return await _handleInverterQuery(text);
       if (_isPlantIntent(text)) return await _handlePlantQuery(text);
       if (_isHelpIntent(text)) return _handleHelp();
-
-      // Fallback
       return await _handleGeneral(text);
     } catch (e) {
       return ChatMessage(
@@ -68,6 +135,154 @@ class ChatbotService {
         isUser: false,
       );
     }
+  }
+
+  /// Build an enriched context string by using rule-based entity resolution
+  /// to map user references ("inverter 1", "sensor 3", etc.) to actual DB
+  /// entities, fetch their latest data, and combine with the standard DB
+  /// context. This gives the LLM precise, pre-resolved data to work with.
+  static Future<String> _buildEnrichedContext(String userInput) async {
+    final text = userInput.toLowerCase().trim();
+    final buf = StringBuffer();
+
+    // -- Resolve entities using rule-based logic --
+    buf.writeln('[RESOLVED ENTITIES]');
+
+    List<Map<String, dynamic>> resolvedInverters = [];
+
+    // Inverters
+    try {
+      final inverters = await _supabase
+          .from('Inverter')
+          .select('id, name, plantId, Plant(name)');
+      resolvedInverters = _resolveDevices(text, inverters);
+      if (resolvedInverters.isNotEmpty) {
+        buf.writeln('Inverters referenced by user:');
+        for (final inv in resolvedInverters) {
+          buf.writeln(
+              '- ${inv['name']} (ID: ${inv['id']}, Plant: ${inv['Plant']?['name'] ?? 'Unknown'})');
+          final latest = await _getLatestInverterData(inv['id'] as String);
+          if (latest != null) {
+            buf.writeln(
+                '  Latest: ActivePower=${latest['activePower']}kW, '
+                'ETodayPower=${latest['eTodayPower']}kWh, '
+                'ETotalPower=${latest['eTotalPower']}kWh, '
+                'PVVoltage=${latest['totalPVVoltage']}V, '
+                'PVCurrent=${latest['totalPVCurrent']}A, '
+                'Timestamp=${latest['timestamp']}');
+          }
+        }
+      }
+    } catch (_) {}
+
+    // Plants
+    try {
+      final plants = await _supabase.from('Plant').select(
+          'id, name, capacityKWp, totalEnergy, todayEnergy, co2Reduced');
+      final resolvedPlants = _resolveDevices(text, plants);
+      if (resolvedPlants.isNotEmpty) {
+        buf.writeln('Plants referenced by user:');
+        for (final p in resolvedPlants) {
+          buf.writeln(
+              '- ${p['name']} (ID: ${p['id']}, '
+              'Capacity: ${p['capacityKWp']}kWp, '
+              'TotalEnergy: ${p['totalEnergy']}kWh, '
+              'TodayEnergy: ${p['todayEnergy']}kWh, '
+              'CO2: ${p['co2Reduced']}kg)');
+        }
+      }
+    } catch (_) {}
+
+    // MFM sensors
+    try {
+      final mfms = await _supabase
+          .from('MFM')
+          .select('id, name, sensorsId, Sensors(plantId, Plant(name))');
+      final resolvedMfms = _resolveDevices(text, mfms);
+      if (resolvedMfms.isNotEmpty) {
+        buf.writeln('MFM sensors referenced by user:');
+        for (final m in resolvedMfms) {
+          final plantName = m['Sensors']?['Plant']?['name'] ?? 'Unknown';
+          buf.writeln(
+              '- ${m['name']} (ID: ${m['id']}, Plant: $plantName)');
+          final latest = await _supabase
+              .from('MFMData')
+              .select()
+              .eq('mfmId', m['id'] as String)
+              .order('timestamp', ascending: false)
+              .limit(1);
+          if (latest.isNotEmpty) {
+            final d = latest[0];
+            buf.writeln(
+                '  Latest: L1V=${d['l1Voltage']}V, L2V=${d['l2Voltage']}V, '
+                'L3V=${d['l3Voltage']}V, L1I=${d['l1Current']}A, '
+                'L2I=${d['l2Current']}A, L3I=${d['l3Current']}A, '
+                'TotalPower=${d['totalPower']}kW');
+          }
+        }
+      }
+    } catch (_) {}
+
+    // Temperature devices
+    try {
+      final temps = await _supabase.from('TemperatureDevice').select(
+          'id, name, sensorsId, Sensors(plantId, Plant(name))');
+      final resolvedTemps = _resolveDevices(text, temps);
+      if (resolvedTemps.isNotEmpty) {
+        buf.writeln('Temperature sensors referenced by user:');
+        for (final t in resolvedTemps) {
+          final plantName = t['Sensors']?['Plant']?['name'] ?? 'Unknown';
+          buf.writeln(
+              '- ${t['name']} (ID: ${t['id']}, Plant: $plantName)');
+          final latest = await _supabase
+              .from('TemperatureData')
+              .select()
+              .eq('deviceId', t['id'] as String)
+              .order('timestamp', ascending: false)
+              .limit(1);
+          if (latest.isNotEmpty) {
+            final d = latest[0];
+            buf.writeln(
+                '  Latest: AmbientTemp=${d['ambientTemp']}C, '
+                'ModuleTemp=${d['moduleTemp']}C');
+          }
+        }
+      }
+    } catch (_) {}
+
+    // Time range detection & historical data for resolved inverters
+    final dateRange = _extractDateRange(text);
+    if (dateRange != null) {
+      buf.writeln(
+          '\nDetected time range: ${dateRange.label} '
+          '(${_fmtDate(dateRange.start)} to ${_fmtDate(dateRange.end)})');
+      for (final inv in resolvedInverters) {
+        try {
+          final summary = await _getDailyInverterSummary(
+              inv['id'] as String, dateRange.start, dateRange.end);
+          if (summary.isNotEmpty) {
+            buf.writeln(
+                'Historical data for ${inv['name']} (${dateRange.label}):');
+            for (final day in summary) {
+              buf.writeln(
+                  '  ${day.date}: Peak=${day.maxPower.toStringAsFixed(1)}kW, '
+                  'Avg=${day.avgPower.toStringAsFixed(1)}kW, '
+                  'Energy=${day.todayEnergy.toStringAsFixed(1)}kWh');
+            }
+          }
+        } catch (_) {}
+      }
+    }
+
+    buf.writeln();
+
+    // -- Standard database context (broader data) --
+    buf.writeln('[DATABASE CONTEXT]');
+    final dbContext =
+        await DatabaseContextService.getContextForQuery(userInput);
+    buf.writeln(dbContext);
+
+    return buf.toString();
   }
 
   // ══════════════════════════════════════════════
